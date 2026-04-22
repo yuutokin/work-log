@@ -26,11 +26,7 @@
 <script type="text/babel">
 const { useState, useEffect, useCallback, useRef } = React;
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  ★ ここに Google Apps Script のウェブアプリURLを貼り付け ★
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-const GAS_URL = "";
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const GAS_URL = "https://script.google.com/macros/s/AKfycbz8-4QA2_bgqXBAL4ZlW6mNyQ2GxTmdURf-xq2Yqh8dmTu5_d0bsGZ3aJ4m15bxHlSbqg/exec";
 
 const CATEGORIES = [
   { id: "routine", label: "定型業務", icon: "📄", color: "#2563eb" },
@@ -329,48 +325,21 @@ function MonthlyView({ entries, onBack }) {
   );
 }
 
-// ─── Setup Screen ───
-function SetupScreen({ onSave }) {
-  const [url, setUrl] = useState("");
-  return (
-    <div style={{ minHeight: "100vh", background: "#f5f7fb", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div style={{ background: "#fff", borderRadius: 20, padding: 28, maxWidth: 440, width: "100%", boxShadow: "0 8px 32px rgba(0,0,0,0.08)" }}>
-        <div style={{ fontSize: 20, fontWeight: 800, color: "#1e293b", marginBottom: 6 }}>🔗 初期設定</div>
-        <div style={{ fontSize: 13, color: "#64748b", lineHeight: 1.7, marginBottom: 20 }}>
-          Google Apps Script のウェブアプリURLを貼り付けてください。<br />
-          セットアップ手順は同梱の「セットアップガイド.md」をご確認ください。
-        </div>
-        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://script.google.com/macros/s/xxxxx/exec"
-          style={{ width: "100%", padding: "12px 14px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 13, outline: "none", boxSizing: "border-box", marginBottom: 16 }}
-          onFocus={(e) => e.target.style.borderColor = "#2563eb"} onBlur={(e) => e.target.style.borderColor = "#e2e8f0"} />
-        <button disabled={!url.startsWith("https://script.google.com/")} onClick={() => onSave(url.trim())} style={{
-          width: "100%", padding: "13px 0", borderRadius: 12, border: "none",
-          background: url.startsWith("https://script.google.com/") ? "#2563eb" : "#cbd5e1",
-          color: "#fff", fontSize: 14, fontWeight: 700, cursor: url.startsWith("https://script.google.com/") ? "pointer" : "default",
-        }}>設定を保存して始める</button>
-      </div>
-    </div>
-  );
-}
-
 // ─── Main App ───
 function WorkLog() {
-  const [gasUrl, setGasUrl] = useState(() => localStorage.getItem("worklog-gas-url") || "");
   const [entries, setEntries] = useState(() => loadLocal());
   const [selectedDate, setSelectedDate] = useState(getToday());
   const [showForm, setShowForm] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const [view, setView] = useState("daily");
-  const [syncStatus, setSyncStatus] = useState(gasUrl ? "syncing" : "nourl");
+  const [syncStatus, setSyncStatus] = useState("syncing");
   const categoryMap = {}; CATEGORIES.forEach((c) => (categoryMap[c.id] = c));
 
   // Initial cloud sync
   useEffect(() => {
-    if (!gasUrl) return;
     setSyncStatus("syncing");
     cloudFetch().then((cloud) => {
       if (cloud) {
-        // Merge: cloud wins for dates that exist in cloud, keep local-only dates
         const local = loadLocal();
         const merged = { ...local, ...cloud };
         setEntries(merged);
@@ -380,18 +349,16 @@ function WorkLog() {
         setSyncStatus("offline");
       }
     });
-  }, [gasUrl]);
+  }, []);
 
   const persist = useCallback((newEntries, changedDate) => {
     setEntries(newEntries);
     saveLocal(newEntries);
-    if (gasUrl) {
-      setSyncStatus("syncing");
-      const tasks = newEntries[changedDate] || [];
-      const syncFn = tasks.length > 0 ? cloudSaveDay(changedDate, tasks) : cloudDeleteDay(changedDate);
-      syncFn.then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
-    }
-  }, [gasUrl]);
+    setSyncStatus("syncing");
+    const tasks = newEntries[changedDate] || [];
+    const syncFn = tasks.length > 0 ? cloudSaveDay(changedDate, tasks) : cloudDeleteDay(changedDate);
+    syncFn.then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
+  }, []);
 
   const todayTasks = entries[selectedDate] || [];
 
@@ -416,11 +383,6 @@ function WorkLog() {
   };
 
   const totalHours = todayTasks.reduce((s, t) => s + (t.hours || 0), 0);
-
-  // Setup screen if no URL
-  if (!gasUrl) {
-    return <SetupScreen onSave={(url) => { localStorage.setItem("worklog-gas-url", url); setGasUrl(url); }} />;
-  }
 
   if (view === "monthly") {
     return (
