@@ -327,28 +327,45 @@ function MonthlyView({ entries, onBack }) {
 
 // ─── Main App ───
 function WorkLog() {
-  const [entries, setEntries] = useState(() => loadLocal());
+  const [entries, setEntries] = useState({});
   const [selectedDate, setSelectedDate] = useState(getToday());
   const [showForm, setShowForm] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const [view, setView] = useState("daily");
   const [syncStatus, setSyncStatus] = useState("syncing");
+  const [loaded, setLoaded] = useState(false);
   const categoryMap = {}; CATEGORIES.forEach((c) => (categoryMap[c.id] = c));
 
-  // Initial cloud sync
+  // Initial sync: cloud is source of truth, local is fallback
   useEffect(() => {
     setSyncStatus("syncing");
     cloudFetch().then((cloud) => {
       if (cloud) {
-        const local = loadLocal();
-        const merged = { ...local, ...cloud };
-        setEntries(merged);
-        saveLocal(merged);
+        setEntries(cloud);
+        saveLocal(cloud);
         setSyncStatus("synced");
       } else {
+        // Offline fallback: use local cache
+        setEntries(loadLocal());
         setSyncStatus("offline");
       }
+      setLoaded(true);
     });
+  }, []);
+
+  // Re-sync from cloud when tab becomes visible (e.g. switching back from another app)
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState === "visible") {
+        setSyncStatus("syncing");
+        cloudFetch().then((cloud) => {
+          if (cloud) { setEntries(cloud); saveLocal(cloud); setSyncStatus("synced"); }
+          else { setSyncStatus("offline"); }
+        });
+      }
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, []);
 
   const persist = useCallback((newEntries, changedDate) => {
@@ -383,6 +400,17 @@ function WorkLog() {
   };
 
   const totalHours = todayTasks.reduce((s, t) => s + (t.hours || 0), 0);
+
+  if (!loaded) {
+    return (
+      <div style={{ minHeight: "100vh", background: "#f5f7fb", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ textAlign: "center" }}>
+          <div className="spinner" style={{ width: 28, height: 28, borderColor: "rgba(37,99,235,0.2)", borderTopColor: "#2563eb", borderWidth: 3, margin: "0 auto 12px" }} />
+          <div style={{ fontSize: 14, color: "#64748b", fontWeight: 500 }}>データを同期中…</div>
+        </div>
+      </div>
+    );
+  }
 
   if (view === "monthly") {
     return (
