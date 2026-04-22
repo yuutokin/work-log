@@ -25,9 +25,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
 <script type="text/babel">
 const { useState, useEffect, useCallback, useRef } = React;
- 
+
 const GAS_URL = "https://script.google.com/macros/s/AKfycbz8-4QA2_bgqXBAL4ZlW6mNyQ2GxTmdURf-xq2Yqh8dmTu5_d0bsGZ3aJ4m15bxHlSbqg/exec";
- 
+
 const CATEGORIES = [
   { id: "routine", label: "定型業務", icon: "📄", color: "#2563eb" },
   { id: "client", label: "クライアント対応", icon: "🤝", color: "#7c3aed" },
@@ -37,15 +37,15 @@ const CATEGORIES = [
   { id: "blog", label: "ブログ作成", icon: "✏️", color: "#d97706" },
   { id: "misc", label: "その他事務作業", icon: "📎", color: "#78716c" },
 ];
- 
+
 const PRIORITY_LEVELS = [
   { id: "high", label: "高", color: "#dc2626" },
   { id: "medium", label: "中", color: "#d97706" },
   { id: "low", label: "低", color: "#6b7280" },
 ];
- 
+
 const LOCAL_KEY = "worklog-entries";
- 
+
 function formatDate(dateStr) {
   const d = new Date(dateStr + "T00:00:00");
   const days = ["日", "月", "火", "水", "木", "金", "土"];
@@ -57,11 +57,11 @@ function getToday() {
 }
 function getMonthKey(d) { return d.substring(0, 7); }
 function generateId() { return Date.now().toString(36) + Math.random().toString(36).substr(2, 5); }
- 
+
 // ─── Storage: localStorage + Cloud sync (JSONP方式でCORS回避) ───
 function loadLocal() { try { return JSON.parse(localStorage.getItem(LOCAL_KEY)) || {}; } catch { return {}; } }
 function saveLocal(e) { localStorage.setItem(LOCAL_KEY, JSON.stringify(e)); }
- 
+
 function jsonp(url) {
   return new Promise((resolve, reject) => {
     const cbName = "_cb_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5);
@@ -74,7 +74,7 @@ function jsonp(url) {
     document.head.appendChild(script);
   });
 }
- 
+
 async function cloudFetch() {
   if (!GAS_URL) return null;
   try {
@@ -83,7 +83,7 @@ async function cloudFetch() {
   } catch (e) { console.error("Cloud fetch error:", e); }
   return null;
 }
- 
+
 async function cloudSaveDay(date, tasks) {
   if (!GAS_URL) return;
   try {
@@ -91,14 +91,14 @@ async function cloudSaveDay(date, tasks) {
     await jsonp(GAS_URL + "?action=saveDayTasks&payload=" + payload);
   } catch (e) { console.error("Cloud save error:", e); }
 }
- 
+
 async function cloudDeleteDay(date) {
   if (!GAS_URL) return;
   try {
     await jsonp(GAS_URL + "?action=deleteDay&date=" + encodeURIComponent(date));
   } catch (e) { console.error("Cloud delete error:", e); }
 }
- 
+
 // ─── SyncStatus indicator ───
 function SyncBadge({ status }) {
   const colors = { synced: "#059669", syncing: "#d97706", offline: "#94a3b8", error: "#dc2626", nourl: "#94a3b8" };
@@ -110,7 +110,7 @@ function SyncBadge({ status }) {
     </div>
   );
 }
- 
+
 // ─── TaskItem ───
 function TaskItem({ task, onDelete, onEdit, categoryMap, readOnly }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -151,7 +151,7 @@ function TaskItem({ task, onDelete, onEdit, categoryMap, readOnly }) {
     </div>
   );
 }
- 
+
 // ─── TaskForm ───
 function TaskForm({ onSave, onCancel, initialData }) {
   const [category, setCategory] = useState(initialData?.category || "");
@@ -162,7 +162,7 @@ function TaskForm({ onSave, onCancel, initialData }) {
   const [hours, setHours] = useState(initialData?.hours || "");
   const canSave = category && title.trim();
   const inp = { width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box" };
- 
+
   return (
     <div className="fade-in" style={{ background: "#fff", borderRadius: 18, padding: 20, boxShadow: "0 8px 32px rgba(0,0,0,0.10)", marginBottom: 16 }}>
       <div style={{ fontSize: 15, fontWeight: 700, color: "#1e293b", marginBottom: 16 }}>{initialData ? "タスク編集" : "新しいタスクを追加"}</div>
@@ -226,7 +226,7 @@ function TaskForm({ onSave, onCancel, initialData }) {
     </div>
   );
 }
- 
+
 // ─── MonthlyView ───
 function MonthlyView({ entries, onBack }) {
   const categoryMap = {}; CATEGORIES.forEach((c) => (categoryMap[c.id] = c));
@@ -234,7 +234,7 @@ function MonthlyView({ entries, onBack }) {
   const months = {};
   Object.keys(entries).sort().reverse().forEach((date) => { const mk = getMonthKey(date); if (!months[mk]) months[mk] = {}; months[mk][date] = entries[date]; });
   const monthKeys = Object.keys(months).sort().reverse();
- 
+
   function getMonthStats(me) {
     let totalTasks = 0, totalHours = 0; const catCount = {};
     Object.values(me).forEach((dt) => dt.forEach((t) => { totalTasks++; if (t.hours) totalHours += t.hours; catCount[t.category] = (catCount[t.category] || 0) + 1; }));
@@ -270,7 +270,7 @@ function MonthlyView({ entries, onBack }) {
     CATEGORIES.filter((c) => stats.catCount[c.id]).forEach((c) => { text += `  ${c.label}：${stats.catCount[c.id]}件\n`; });
     navigator.clipboard.writeText(text).then(() => { setCopiedMonth(mk); setTimeout(() => setCopiedMonth(""), 2000); });
   }
- 
+
   const [expandedMonth, setExpandedMonth] = useState(monthKeys[0] || "");
   return (
     <div>
@@ -324,7 +324,7 @@ function MonthlyView({ entries, onBack }) {
     </div>
   );
 }
- 
+
 // ─── Main App ───
 function WorkLog() {
   const [entries, setEntries] = useState(() => loadLocal());
@@ -334,7 +334,7 @@ function WorkLog() {
   const [view, setView] = useState("daily");
   const [syncStatus, setSyncStatus] = useState("syncing");
   const categoryMap = {}; CATEGORIES.forEach((c) => (categoryMap[c.id] = c));
- 
+
   // Initial cloud sync
   useEffect(() => {
     setSyncStatus("syncing");
@@ -350,7 +350,7 @@ function WorkLog() {
       }
     });
   }, []);
- 
+
   const persist = useCallback((newEntries, changedDate) => {
     setEntries(newEntries);
     saveLocal(newEntries);
@@ -359,9 +359,9 @@ function WorkLog() {
     const syncFn = tasks.length > 0 ? cloudSaveDay(changedDate, tasks) : cloudDeleteDay(changedDate);
     syncFn.then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
   }, []);
- 
+
   const todayTasks = entries[selectedDate] || [];
- 
+
   const handleSave = (task) => {
     const ne = { ...entries }; const dt = [...(ne[selectedDate] || [])];
     const idx = dt.findIndex((t) => t.id === task.id);
@@ -381,9 +381,9 @@ function WorkLog() {
     setSelectedDate(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`);
     setShowForm(false); setEditingTask(null);
   };
- 
+
   const totalHours = todayTasks.reduce((s, t) => s + (t.hours || 0), 0);
- 
+
   if (view === "monthly") {
     return (
       <div style={{ minHeight: "100vh", background: "#f5f7fb", padding: "16px 16px 100px", maxWidth: 520, margin: "0 auto" }}>
@@ -391,7 +391,7 @@ function WorkLog() {
       </div>
     );
   }
- 
+
   return (
     <div style={{ minHeight: "100vh", background: "#f5f7fb", padding: "0 0 100px", maxWidth: 520, margin: "0 auto" }}>
       <div style={{ background: "linear-gradient(135deg, #1e3a5f, #2563eb)", padding: "24px 18px 20px", borderRadius: "0 0 24px 24px", color: "#fff", marginBottom: 18 }}>
@@ -422,7 +422,7 @@ function WorkLog() {
           <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800 }}>{new Set(todayTasks.map((t) => t.category)).size}</div><div style={{ fontSize: 10, opacity: 0.7 }}>カテゴリ</div></div>
         </div>
       </div>
- 
+
       <div style={{ padding: "0 16px" }}>
         {showForm ? (
           <TaskForm onSave={handleSave} onCancel={() => { setShowForm(false); setEditingTask(null); }} initialData={editingTask} />
@@ -441,7 +441,7 @@ function WorkLog() {
         )}
         {todayTasks.map((task) => <TaskItem key={task.id} task={task} onDelete={handleDelete} onEdit={handleEdit} categoryMap={categoryMap} />)}
       </div>
- 
+
       {selectedDate !== getToday() && (
         <button onClick={() => { setSelectedDate(getToday()); setShowForm(false); setEditingTask(null); }} style={{
           position: "fixed", bottom: 20, right: 20, background: "#2563eb", color: "#fff", border: "none",
@@ -452,7 +452,7 @@ function WorkLog() {
     </div>
   );
 }
- 
+
 ReactDOM.createRoot(document.getElementById("root")).render(<WorkLog />);
 </script>
 </body>
