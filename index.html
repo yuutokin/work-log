@@ -38,13 +38,16 @@ const CATEGORIES = [
   { id: "misc", label: "その他事務作業", icon: "📎", color: "#78716c" },
 ];
 
-const PRIORITY_LEVELS = [
-  { id: "high", label: "高", color: "#dc2626" },
-  { id: "medium", label: "中", color: "#d97706" },
-  { id: "low", label: "低", color: "#6b7280" },
-];
-
 const LOCAL_KEY = "worklog-entries";
+
+function formatMinutes(min) {
+  if (!min) return "";
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (h > 0 && m > 0) return `${h}h${m}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
+}
 
 function formatDate(dateStr) {
   const d = new Date(dateStr + "T00:00:00");
@@ -115,7 +118,7 @@ function SyncBadge({ status }) {
 function TaskItem({ task, onDelete, onEdit, categoryMap, readOnly }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const cat = categoryMap[task.category];
-  const pri = PRIORITY_LEVELS.find((p) => p.id === task.priority);
+  const mins = task.minutes || (task.hours ? Math.round(task.hours * 60) : null);
   return (
     <div className="fade-in" style={{
       background: "#fff", borderRadius: 14, padding: "14px 16px", marginBottom: 10,
@@ -132,14 +135,12 @@ function TaskItem({ task, onDelete, onEdit, categoryMap, readOnly }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
             <span style={{ fontSize: 11, background: cat?.color + "18", color: cat?.color, padding: "2px 8px", borderRadius: 20, fontWeight: 600, whiteSpace: "nowrap" }}>{cat?.icon} {cat?.label}</span>
-            {pri && <span style={{ fontSize: 10, background: pri.color + "18", color: pri.color, padding: "2px 7px", borderRadius: 20, fontWeight: 700 }}>{pri.label}</span>}
-            {task.hours && <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 500 }}>⏱ {task.hours}h</span>}
+            {mins && <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 500 }}>⏱ {formatMinutes(mins)}</span>}
           </div>
           <div style={{ fontSize: 14, fontWeight: 600, color: "#1e293b", lineHeight: 1.5, marginBottom: task.detail ? 4 : 0 }}>
             {task.caseName && <span style={{ color: "#64748b", fontWeight: 500, fontSize: 12 }}>【{task.caseName}】</span>}
-            {task.title}
+            {task.detail || task.title || ""}
           </div>
-          {task.detail && <div style={{ fontSize: 12.5, color: "#64748b", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{task.detail}</div>}
         </div>
         {!readOnly && (
           <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
@@ -156,16 +157,18 @@ function TaskItem({ task, onDelete, onEdit, categoryMap, readOnly }) {
 function TaskForm({ onSave, onCancel, initialData }) {
   const [category, setCategory] = useState(initialData?.category || "");
   const [caseName, setCaseName] = useState(initialData?.caseName || "");
-  const [title, setTitle] = useState(initialData?.title || "");
-  const [detail, setDetail] = useState(initialData?.detail || "");
-  const [priority, setPriority] = useState(initialData?.priority || "medium");
-  const [hours, setHours] = useState(initialData?.hours || "");
-  const canSave = category && title.trim();
+  const [detail, setDetail] = useState(initialData?.detail || initialData?.title || "");
+  const [minutes, setMinutes] = useState(() => {
+    if (initialData?.minutes) return String(initialData.minutes);
+    if (initialData?.hours) return String(Math.round(initialData.hours * 60));
+    return "";
+  });
+  const canSave = category && detail.trim();
   const inp = { width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box" };
 
   return (
     <div className="fade-in" style={{ background: "#fff", borderRadius: 18, padding: 20, boxShadow: "0 8px 32px rgba(0,0,0,0.10)", marginBottom: 16 }}>
-      <div style={{ fontSize: 15, fontWeight: 700, color: "#1e293b", marginBottom: 16 }}>{initialData ? "タスク編集" : "新しいタスクを追加"}</div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: "#1e293b", marginBottom: 16 }}>{initialData ? "記録を編集" : "新しい業務記録を追加"}</div>
       <div style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 8 }}>カテゴリ *</div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -183,42 +186,29 @@ function TaskForm({ onSave, onCancel, initialData }) {
           onFocus={(e) => e.target.style.borderColor = "#2563eb"} onBlur={(e) => e.target.style.borderColor = "#e2e8f0"} />
       </div>
       <div style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>業務内容 *</div>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例：訴状ドラフト作成" style={inp}
-          onFocus={(e) => e.target.style.borderColor = "#2563eb"} onBlur={(e) => e.target.style.borderColor = "#e2e8f0"} />
-      </div>
-      <div style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>詳細メモ</div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>詳細メモ *</div>
         <textarea value={detail} onChange={(e) => setDetail(e.target.value)} placeholder={"具体的な作業内容、進捗状況、\n次のアクションなどを記入"} rows={4}
           style={{ ...inp, resize: "vertical", fontFamily: "inherit", lineHeight: 1.6 }}
           onFocus={(e) => e.target.style.borderColor = "#2563eb"} onBlur={(e) => e.target.style.borderColor = "#e2e8f0"} />
       </div>
-      <div style={{ display: "flex", gap: 12, marginBottom: 18 }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>重要度</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            {PRIORITY_LEVELS.map((p) => (
-              <button key={p.id} onClick={() => setPriority(p.id)} style={{
-                flex: 1, padding: "8px 0", borderRadius: 8, border: priority === p.id ? `2px solid ${p.color}` : "2px solid #e2e8f0",
-                background: priority === p.id ? p.color + "15" : "#f8fafc", color: priority === p.id ? p.color : "#94a3b8", fontSize: 13, fontWeight: 700, cursor: "pointer",
-              }}>{p.label}</button>
-            ))}
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>作業時間</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ position: "relative", width: 120 }}>
+            <input value={minutes} onChange={(e) => setMinutes(e.target.value.replace(/[^0-9]/g, ""))} placeholder="0"
+              style={{ width: "100%", padding: "10px 36px 10px 14px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box", textAlign: "right" }} />
+            <span style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", fontSize: 12, color: "#94a3b8" }}>分</span>
           </div>
-        </div>
-        <div style={{ width: 90 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>作業時間</div>
-          <div style={{ position: "relative" }}>
-            <input value={hours} onChange={(e) => setHours(e.target.value.replace(/[^0-9.]/g, ""))} placeholder="0.0"
-              style={{ width: "100%", padding: "8px 30px 8px 12px", borderRadius: 8, border: "1.5px solid #e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box", textAlign: "right" }} />
-            <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 12, color: "#94a3b8" }}>h</span>
-          </div>
+          {minutes && parseInt(minutes) >= 60 && (
+            <span style={{ fontSize: 12, color: "#64748b" }}>= {formatMinutes(parseInt(minutes))}</span>
+          )}
         </div>
       </div>
       <div style={{ display: "flex", gap: 10 }}>
         <button onClick={onCancel} style={{ flex: 1, padding: "12px 0", borderRadius: 12, border: "1.5px solid #e2e8f0", background: "#fff", color: "#64748b", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>キャンセル</button>
         <button disabled={!canSave} onClick={() => {
           if (!canSave) return;
-          onSave({ id: initialData?.id || generateId(), category, caseName: caseName.trim(), title: title.trim(), detail: detail.trim(), priority, hours: hours ? parseFloat(hours) : null });
+          onSave({ id: initialData?.id || generateId(), category, caseName: caseName.trim(), title: "", detail: detail.trim(), priority: "medium", minutes: minutes ? parseInt(minutes) : null, hours: minutes ? parseInt(minutes) / 60 : null });
         }} style={{ flex: 2, padding: "12px 0", borderRadius: 12, border: "none", background: canSave ? "#2563eb" : "#cbd5e1", color: "#fff", fontSize: 14, fontWeight: 700, cursor: canSave ? "pointer" : "default" }}>
           {initialData ? "更新する" : "保存する"}
         </button>
@@ -236,19 +226,19 @@ function MonthlyView({ entries, onBack }) {
   const monthKeys = Object.keys(months).sort().reverse();
 
   function getMonthStats(me) {
-    let totalTasks = 0, totalHours = 0; const catCount = {};
-    Object.values(me).forEach((dt) => dt.forEach((t) => { totalTasks++; if (t.hours) totalHours += t.hours; catCount[t.category] = (catCount[t.category] || 0) + 1; }));
-    return { totalTasks, totalHours, catCount };
+    let totalTasks = 0, totalMins = 0; const catCount = {};
+    Object.values(me).forEach((dt) => dt.forEach((t) => { totalTasks++; const m = t.minutes || (t.hours ? Math.round(t.hours * 60) : 0); totalMins += m; catCount[t.category] = (catCount[t.category] || 0) + 1; }));
+    return { totalTasks, totalMins, catCount };
   }
   function exportCSV(mk) {
     const md = months[mk], dates = Object.keys(md).sort(), bom = "\uFEFF";
-    const header = "日付,カテゴリ,案件名,業務内容,詳細メモ,重要度,作業時間(h)";
+    const header = "日付,カテゴリ,案件名,詳細メモ,作業時間(分)";
     const rows = [];
     dates.forEach((date) => md[date].forEach((t) => {
       const cat = categoryMap[t.category]?.label || t.category;
-      const pri = PRIORITY_LEVELS.find((p) => p.id === t.priority)?.label || "";
       const esc = (s) => `"${(s || "").replace(/"/g, '""')}"`;
-      rows.push([date, esc(cat), esc(t.caseName), esc(t.title), esc(t.detail), pri, t.hours || ""].join(","));
+      const mins = t.minutes || (t.hours ? Math.round(t.hours * 60) : "");
+      rows.push([date, esc(cat), esc(t.caseName), esc(t.detail || t.title), mins].join(","));
     }));
     const blob = new Blob([bom + header + "\n" + rows.join("\n")], { type: "text/csv;charset=utf-8;" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
@@ -256,14 +246,17 @@ function MonthlyView({ entries, onBack }) {
   }
   function copyAsText(mk) {
     const md = months[mk], dates = Object.keys(md).sort(), [y, m] = mk.split("-"), stats = getMonthStats(md);
-    let text = `══════════════════════════\n  業務日報　${parseInt(y)}年${parseInt(m)}月\n  稼働${dates.length}日 ・ ${stats.totalTasks}件 ・ ${stats.totalHours.toFixed(1)}h\n══════════════════════════\n\n`;
+    let text = `══════════════════════════\n  業務日報　${parseInt(y)}年${parseInt(m)}月\n  稼働${dates.length}日 ・ ${stats.totalTasks}件 ・ ${formatMinutes(stats.totalMins)}\n══════════════════════════\n\n`;
     dates.forEach((date) => {
       text += `■ ${formatDate(date)}\n──────────────────\n`;
       md[date].forEach((t, i) => {
-        const cat = categoryMap[t.category]?.label || t.category, pri = PRIORITY_LEVELS.find((p) => p.id === t.priority)?.label || "";
-        text += `  ${i + 1}. [${cat}]${pri ? `（${pri}）` : ""}`; if (t.hours) text += ` ${t.hours}h`; text += "\n";
-        if (t.caseName) text += `     案件：${t.caseName}\n`; text += `     内容：${t.title}\n`;
-        if (t.detail) text += `     詳細：${t.detail.replace(/\n/g, "\n           ")}\n`; text += "\n";
+        const cat = categoryMap[t.category]?.label || t.category;
+        const mins = t.minutes || (t.hours ? Math.round(t.hours * 60) : 0);
+        text += `  ${i + 1}. [${cat}]`; if (mins) text += ` ${formatMinutes(mins)}`; text += "\n";
+        if (t.caseName) text += `     案件：${t.caseName}\n`;
+        const content = t.detail || t.title || "";
+        if (content) text += `     内容：${content.replace(/\n/g, "\n           ")}\n`;
+        text += "\n";
       });
     });
     text += `──────────────────\n【カテゴリ別集計】\n`;
@@ -288,7 +281,7 @@ function MonthlyView({ entries, onBack }) {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
                   <div style={{ fontSize: 17, fontWeight: 800, color: "#1e293b" }}>{parseInt(y)}年{parseInt(m)}月</div>
-                  <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>{dates.length}日稼働 ・ {stats.totalTasks}件 ・ {stats.totalHours.toFixed(1)}h</div>
+                  <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>{dates.length}日稼働 ・ {stats.totalTasks}件 ・ {formatMinutes(stats.totalMins)}</div>
                 </div>
                 <span style={{ fontSize: 18, color: "#94a3b8", transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}>▾</span>
               </div>
@@ -311,7 +304,7 @@ function MonthlyView({ entries, onBack }) {
                   <div key={date} style={{ marginTop: 12 }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: "#475569", marginBottom: 8, paddingBottom: 4, borderBottom: "1px solid #f1f5f9" }}>
                       {formatDate(date)}
-                      <span style={{ fontWeight: 500, color: "#94a3b8", marginLeft: 8 }}>{months[mk][date].length}件{(() => { const dh = months[mk][date].reduce((s, t) => s + (t.hours || 0), 0); return dh > 0 ? ` ・ ${dh.toFixed(1)}h` : ""; })()}</span>
+                      <span style={{ fontWeight: 500, color: "#94a3b8", marginLeft: 8 }}>{months[mk][date].length}件{(() => { const dm = months[mk][date].reduce((s, t) => s + (t.minutes || (t.hours ? Math.round(t.hours * 60) : 0)), 0); return dm > 0 ? ` ・ ${formatMinutes(dm)}` : ""; })()}</span>
                     </div>
                     {months[mk][date].map((task) => <TaskItem key={task.id} task={task} onDelete={() => {}} onEdit={() => {}} categoryMap={categoryMap} readOnly />)}
                   </div>
@@ -399,7 +392,7 @@ function WorkLog() {
     setShowForm(false); setEditingTask(null);
   };
 
-  const totalHours = todayTasks.reduce((s, t) => s + (t.hours || 0), 0);
+  const totalMins = todayTasks.reduce((s, t) => s + (t.minutes || (t.hours ? Math.round(t.hours * 60) : 0)), 0);
 
   if (!loaded) {
     return (
@@ -443,9 +436,9 @@ function WorkLog() {
           <button onClick={() => changeDate(1)} style={{ background: "none", border: "none", color: "#fff", fontSize: 20, cursor: "pointer", padding: "0 8px" }}>›</button>
         </div>
         <div style={{ display: "flex", gap: 16, marginTop: 14, justifyContent: "center" }}>
-          <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800 }}>{todayTasks.length}</div><div style={{ fontSize: 10, opacity: 0.7 }}>タスク</div></div>
+          <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800 }}>{todayTasks.length}</div><div style={{ fontSize: 10, opacity: 0.7 }}>記録</div></div>
           <div style={{ width: 1, background: "rgba(255,255,255,0.2)" }} />
-          <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800 }}>{totalHours.toFixed(1)}</div><div style={{ fontSize: 10, opacity: 0.7 }}>時間</div></div>
+          <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800 }}>{formatMinutes(totalMins) || "0m"}</div><div style={{ fontSize: 10, opacity: 0.7 }}>時間</div></div>
           <div style={{ width: 1, background: "rgba(255,255,255,0.2)" }} />
           <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800 }}>{new Set(todayTasks.map((t) => t.category)).size}</div><div style={{ fontSize: 10, opacity: 0.7 }}>カテゴリ</div></div>
         </div>
@@ -458,13 +451,13 @@ function WorkLog() {
           <button onClick={() => { setEditingTask(null); setShowForm(true); }} style={{
             width: "100%", padding: "14px", borderRadius: 14, border: "2px dashed #cbd5e1",
             background: "#fff", color: "#2563eb", fontSize: 14, fontWeight: 700, cursor: "pointer", marginBottom: 16,
-          }}>＋ タスクを追加</button>
+          }}>＋ 業務記録を追加</button>
         )}
         {todayTasks.length === 0 && !showForm && (
           <div style={{ textAlign: "center", padding: "40px 20px", color: "#94a3b8" }}>
             <div style={{ fontSize: 36, marginBottom: 10 }}>📋</div>
             <div style={{ fontSize: 14, fontWeight: 500 }}>この日の記録はまだありません</div>
-            <div style={{ fontSize: 12, marginTop: 4 }}>上のボタンからタスクを追加しましょう</div>
+            <div style={{ fontSize: 12, marginTop: 4 }}>上のボタンから業務記録を追加しましょう</div>
           </div>
         )}
         {todayTasks.map((task) => <TaskItem key={task.id} task={task} onDelete={handleDelete} onEdit={handleEdit} categoryMap={categoryMap} />)}
