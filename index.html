@@ -318,9 +318,273 @@ function MonthlyView({ entries, onBack }) {
   );
 }
 
-// ─── Main App ───
+const ACHIEVEMENT_TYPES = [
+  { id: "blog", label: "ブログ記事", icon: "✍️", color: "#d97706" },
+  { id: "document", label: "書面・起案", icon: "⚖️", color: "#dc2626" },
+  { id: "template", label: "テンプレート", icon: "📋", color: "#2563eb" },
+  { id: "manual", label: "マニュアル", icon: "📖", color: "#0891b2" },
+  { id: "system", label: "システム・ツール", icon: "🖥️", color: "#059669" },
+  { id: "other", label: "その他", icon: "📎", color: "#78716c" },
+];
+
+const ACH_LOCAL_KEY = "worklog-achievements";
+function loadLocalAch() { try { return JSON.parse(localStorage.getItem(ACH_LOCAL_KEY)) || []; } catch { return []; } }
+function saveLocalAch(a) { localStorage.setItem(ACH_LOCAL_KEY, JSON.stringify(a)); }
+
+async function cloudFetchAch() {
+  if (!GAS_URL) return null;
+  try { const d = await jsonp(GAS_URL + "?action=fetchAch"); if (d.success) return d.achievements; } catch {}
+  return null;
+}
+async function cloudSaveAch(achievements) {
+  if (!GAS_URL) return;
+  try { const payload = encodeURIComponent(JSON.stringify({ achievements })); await jsonp(GAS_URL + "?action=saveAch&payload=" + payload); } catch {}
+}
+
+// WordPress REST API でタイトル・日付を取得
+async function fetchWpInfo(url) {
+  try {
+    const u = new URL(url);
+    // スラッグ形式 or ?p=123 形式どちらも対応
+    const slug = u.pathname.replace(/\/$/, "").split("/").pop();
+    const postId = u.searchParams.get("p");
+    const base = `${u.protocol}//${u.host}`;
+
+    let apiUrl;
+    if (postId) {
+      apiUrl = `${base}/wp-json/wp/v2/posts/${postId}?_fields=title,date`;
+    } else {
+      apiUrl = `${base}/wp-json/wp/v2/posts?slug=${slug}&_fields=title,date`;
+    }
+
+    const res = await fetch(apiUrl);
+    if (!res.ok) throw new Error("fetch failed");
+    const data = await res.json();
+    const post = Array.isArray(data) ? data[0] : data;
+    if (!post) return null;
+    return {
+      title: post.title?.rendered?.replace(/&amp;/g, "&").replace(/&#[0-9]+;/g, (m) => String.fromCharCode(parseInt(m.slice(2, -1)))) || "",
+      date: post.date ? post.date.substring(0, 10) : "",
+    };
+  } catch { return null; }
+}
+
+// ─── AchievementForm ───
+function AchievementForm({ onSave, onCancel, initialData }) {
+  const [type, setType] = useState(initialData?.type || "");
+  const [title, setTitle] = useState(initialData?.title || "");
+  const [url, setUrl] = useState(initialData?.url || "");
+  const [date, setDate] = useState(initialData?.date || getToday());
+  const [memo, setMemo] = useState(initialData?.memo || "");
+  const [fetching, setFetching] = useState(false);
+  const [fetchError, setFetchError] = useState("");
+  const canSave = type && title.trim();
+  const inp = { width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box" };
+
+  const handleUrlBlur = async () => {
+    if (!url || !url.startsWith("http") || title) return;
+    setFetching(true); setFetchError("");
+    const info = await fetchWpInfo(url);
+    setFetching(false);
+    if (info) {
+      if (info.title) setTitle(info.title);
+      if (info.date) setDate(info.date);
+    } else {
+      setFetchError("タイトルの自動取得に失敗しました。手動で入力してください。");
+    }
+  };
+
+  return (
+    <div className="fade-in" style={{ background: "#fff", borderRadius: 18, padding: 20, boxShadow: "0 8px 32px rgba(0,0,0,0.10)", marginBottom: 16 }}>
+      <div style={{ fontSize: 15, fontWeight: 700, color: "#1e293b", marginBottom: 16 }}>{initialData ? "成果物を編集" : "成果物を記録"}</div>
+
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 8 }}>種別 *</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {ACHIEVEMENT_TYPES.map((t) => (
+            <button key={t.id} onClick={() => setType(t.id)} style={{
+              padding: "6px 12px", borderRadius: 20, border: type === t.id ? `2px solid ${t.color}` : "2px solid #e2e8f0",
+              background: type === t.id ? t.color + "15" : "#f8fafc", color: type === t.id ? t.color : "#64748b", fontSize: 12, fontWeight: 600, cursor: "pointer",
+            }}>{t.icon} {t.label}</button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>URL <span style={{ fontSize: 10, fontWeight: 400 }}>（ブログ記事はURLを入力するとタイトルを自動取得）</span></div>
+        <div style={{ position: "relative" }}>
+          <input value={url} onChange={(e) => setUrl(e.target.value)} onBlur={handleUrlBlur}
+            placeholder="https://example.com/article/" style={inp}
+            onFocus={(e) => e.target.style.borderColor = "#2563eb"} />
+          {fetching && <span style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "#d97706" }}>取得中…</span>}
+        </div>
+        {fetchError && <div style={{ fontSize: 11, color: "#dc2626", marginTop: 4 }}>{fetchError}</div>}
+      </div>
+
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>タイトル *</div>
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例：相続放棄の手続きを解説"
+          style={inp} onFocus={(e) => e.target.style.borderColor = "#2563eb"} onBlur={(e) => e.target.style.borderColor = "#e2e8f0"} />
+      </div>
+
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>完成日</div>
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+          style={{ ...inp, colorScheme: "light" }} onFocus={(e) => e.target.style.borderColor = "#2563eb"} onBlur={(e) => e.target.style.borderColor = "#e2e8f0"} />
+      </div>
+
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>メモ・アピールポイント</div>
+        <textarea value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="所長へのアピールポイント、反響、工夫した点など" rows={3}
+          style={{ ...inp, resize: "vertical", fontFamily: "inherit", lineHeight: 1.6 }}
+          onFocus={(e) => e.target.style.borderColor = "#2563eb"} onBlur={(e) => e.target.style.borderColor = "#e2e8f0"} />
+      </div>
+
+      <div style={{ display: "flex", gap: 10 }}>
+        <button onClick={onCancel} style={{ flex: 1, padding: "12px 0", borderRadius: 12, border: "1.5px solid #e2e8f0", background: "#fff", color: "#64748b", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>キャンセル</button>
+        <button disabled={!canSave} onClick={() => {
+          if (!canSave) return;
+          onSave({ id: initialData?.id || generateId(), type, title: title.trim(), url: url.trim(), date, memo: memo.trim() });
+        }} style={{ flex: 2, padding: "12px 0", borderRadius: 12, border: "none", background: canSave ? "#059669" : "#cbd5e1", color: "#fff", fontSize: 14, fontWeight: 700, cursor: canSave ? "pointer" : "default" }}>
+          {initialData ? "更新する" : "記録する"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── AchievementItem ───
+function AchievementItem({ item, onDelete, onEdit }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const t = ACHIEVEMENT_TYPES.find((t) => t.id === item.type) || ACHIEVEMENT_TYPES[5];
+  return (
+    <div className="fade-in" style={{ background: "#fff", borderRadius: 14, padding: "14px 16px", marginBottom: 10, borderLeft: `4px solid ${t.color}`, boxShadow: "0 1px 4px rgba(0,0,0,0.04)", position: "relative" }}>
+      {confirmDelete && (
+        <div style={{ position: "absolute", inset: 0, background: "rgba(255,255,255,0.95)", borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 10, zIndex: 10 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: "#dc2626" }}>削除しますか？</span>
+          <button onClick={() => { onDelete(item.id); setConfirmDelete(false); }} style={{ padding: "6px 16px", borderRadius: 8, border: "none", background: "#dc2626", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>削除</button>
+          <button onClick={() => setConfirmDelete(false)} style={{ padding: "6px 16px", borderRadius: 8, border: "1.5px solid #e2e8f0", background: "#fff", color: "#64748b", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>戻る</button>
+        </div>
+      )}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, background: t.color + "18", color: t.color, padding: "2px 8px", borderRadius: 20, fontWeight: 600 }}>{t.icon} {t.label}</span>
+            <span style={{ fontSize: 11, color: "#94a3b8" }}>{item.date}</span>
+          </div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "#1e293b", lineHeight: 1.5, marginBottom: 4 }}>
+            {item.url ? <a href={item.url} target="_blank" rel="noopener noreferrer" style={{ color: "#1e293b", textDecoration: "none" }}>{item.title} <span style={{ fontSize: 11, color: "#2563eb" }}>↗</span></a> : item.title}
+          </div>
+          {item.memo && <div style={{ fontSize: 12.5, color: "#64748b", lineHeight: 1.6 }}>{item.memo}</div>}
+        </div>
+        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+          <button onClick={() => onEdit(item)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, padding: 4, color: "#94a3b8" }}>✎</button>
+          <button onClick={() => setConfirmDelete(true)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, padding: 4, color: "#94a3b8" }}>×</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── AchievementsView ───
+function AchievementsView({ achievements, onSave, onDelete, onEdit }) {
+  const [showForm, setShowForm] = useState(false);
+  const [editingItem, setEditingItem] = useState(null);
+  const [filterMonth, setFilterMonth] = useState("");
+
+  // Group by month
+  const months = {};
+  achievements.forEach((a) => {
+    const mk = getMonthKey(a.date);
+    if (!months[mk]) months[mk] = [];
+    months[mk].push(a);
+  });
+  const monthKeys = Object.keys(months).sort().reverse();
+  const displayMonths = filterMonth ? { [filterMonth]: months[filterMonth] || [] } : months;
+
+  const handleSave = (item) => {
+    onSave(item);
+    setShowForm(false);
+    setEditingItem(null);
+  };
+  const handleEdit = (item) => { setEditingItem(item); setShowForm(true); };
+
+  return (
+    <div style={{ padding: "0 0 100px", maxWidth: 520, margin: "0 auto" }}>
+      {/* Header */}
+      <div style={{ background: "linear-gradient(135deg, #064e3b, #059669)", padding: "24px 18px 20px", borderRadius: "0 0 24px 24px", color: "#fff", marginBottom: 18 }}>
+        <div style={{ fontSize: 11, opacity: 0.7, fontWeight: 500, letterSpacing: 1 }}>ACHIEVEMENTS</div>
+        <div style={{ fontSize: 20, fontWeight: 800, marginTop: 2, marginBottom: 14 }}>成果物ログ</div>
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800 }}>{achievements.length}</div><div style={{ fontSize: 10, opacity: 0.7 }}>合計</div></div>
+          <div style={{ width: 1, background: "rgba(255,255,255,0.2)", height: 32 }} />
+          {ACHIEVEMENT_TYPES.filter(t => achievements.some(a => a.type === t.id)).map(t => (
+            <div key={t.id} style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 18, fontWeight: 800 }}>{achievements.filter(a => a.type === t.id).length}</div>
+              <div style={{ fontSize: 9, opacity: 0.7 }}>{t.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding: "0 16px" }}>
+        {showForm ? (
+          <AchievementForm onSave={handleSave} onCancel={() => { setShowForm(false); setEditingItem(null); }} initialData={editingItem} />
+        ) : (
+          <button onClick={() => { setEditingItem(null); setShowForm(true); }} style={{
+            width: "100%", padding: "14px", borderRadius: 14, border: "2px dashed #a7f3d0",
+            background: "#fff", color: "#059669", fontSize: 14, fontWeight: 700, cursor: "pointer", marginBottom: 16,
+          }}>＋ 成果物を記録</button>
+        )}
+
+        {/* Month filter */}
+        {monthKeys.length > 1 && !showForm && (
+          <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+            <button onClick={() => setFilterMonth("")} style={{
+              padding: "4px 12px", borderRadius: 20, border: filterMonth === "" ? "2px solid #059669" : "2px solid #e2e8f0",
+              background: filterMonth === "" ? "#ecfdf5" : "#f8fafc", color: filterMonth === "" ? "#059669" : "#64748b", fontSize: 11, fontWeight: 600, cursor: "pointer",
+            }}>すべて</button>
+            {monthKeys.map(mk => {
+              const [y, m] = mk.split("-");
+              return (
+                <button key={mk} onClick={() => setFilterMonth(mk)} style={{
+                  padding: "4px 12px", borderRadius: 20, border: filterMonth === mk ? "2px solid #059669" : "2px solid #e2e8f0",
+                  background: filterMonth === mk ? "#ecfdf5" : "#f8fafc", color: filterMonth === mk ? "#059669" : "#64748b", fontSize: 11, fontWeight: 600, cursor: "pointer",
+                }}>{parseInt(y)}年{parseInt(m)}月</button>
+              );
+            })}
+          </div>
+        )}
+
+        {achievements.length === 0 && !showForm && (
+          <div style={{ textAlign: "center", padding: "40px 20px", color: "#94a3b8" }}>
+            <div style={{ fontSize: 36, marginBottom: 10 }}>🏆</div>
+            <div style={{ fontSize: 14, fontWeight: 500 }}>まだ成果物が記録されていません</div>
+            <div style={{ fontSize: 12, marginTop: 4 }}>上のボタンから記録しましょう</div>
+          </div>
+        )}
+
+        {Object.keys(displayMonths).sort().reverse().map(mk => {
+          const [y, m] = mk.split("-");
+          const items = displayMonths[mk] || [];
+          return (
+            <div key={mk}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#475569", marginBottom: 8, paddingBottom: 4, borderBottom: "1px solid #e2e8f0" }}>
+                {parseInt(y)}年{parseInt(m)}月 <span style={{ fontWeight: 500, color: "#94a3b8" }}>({items.length}件)</span>
+              </div>
+              {items.sort((a, b) => b.date.localeCompare(a.date)).map(item => (
+                <AchievementItem key={item.id} item={item} onDelete={onDelete} onEdit={handleEdit} />
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 function WorkLog() {
   const [entries, setEntries] = useState({});
+  const [achievements, setAchievements] = useState([]);
   const [selectedDate, setSelectedDate] = useState(getToday());
   const [showForm, setShowForm] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
@@ -329,31 +593,24 @@ function WorkLog() {
   const [loaded, setLoaded] = useState(false);
   const categoryMap = {}; CATEGORIES.forEach((c) => (categoryMap[c.id] = c));
 
-  // Initial sync: cloud is source of truth, local is fallback
   useEffect(() => {
     setSyncStatus("syncing");
-    cloudFetch().then((cloud) => {
-      if (cloud) {
-        setEntries(cloud);
-        saveLocal(cloud);
-        setSyncStatus("synced");
-      } else {
-        // Offline fallback: use local cache
-        setEntries(loadLocal());
-        setSyncStatus("offline");
-      }
+    Promise.all([cloudFetch(), cloudFetchAch()]).then(([cloud, cloudAch]) => {
+      if (cloud) { setEntries(cloud); saveLocal(cloud); } else { setEntries(loadLocal()); }
+      if (cloudAch) { setAchievements(cloudAch); saveLocalAch(cloudAch); } else { setAchievements(loadLocalAch()); }
+      setSyncStatus(cloud ? "synced" : "offline");
       setLoaded(true);
     });
   }, []);
 
-  // Re-sync from cloud when tab becomes visible (e.g. switching back from another app)
   useEffect(() => {
     function onVisible() {
       if (document.visibilityState === "visible") {
         setSyncStatus("syncing");
-        cloudFetch().then((cloud) => {
-          if (cloud) { setEntries(cloud); saveLocal(cloud); setSyncStatus("synced"); }
-          else { setSyncStatus("offline"); }
+        Promise.all([cloudFetch(), cloudFetchAch()]).then(([cloud, cloudAch]) => {
+          if (cloud) { setEntries(cloud); saveLocal(cloud); }
+          if (cloudAch) { setAchievements(cloudAch); saveLocalAch(cloudAch); }
+          setSyncStatus(cloud ? "synced" : "offline");
         });
       }
     }
@@ -362,12 +619,15 @@ function WorkLog() {
   }, []);
 
   const persist = useCallback((newEntries, changedDate) => {
-    setEntries(newEntries);
-    saveLocal(newEntries);
-    setSyncStatus("syncing");
+    setEntries(newEntries); saveLocal(newEntries); setSyncStatus("syncing");
     const tasks = newEntries[changedDate] || [];
-    const syncFn = tasks.length > 0 ? cloudSaveDay(changedDate, tasks) : cloudDeleteDay(changedDate);
-    syncFn.then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
+    const fn = tasks.length > 0 ? cloudSaveDay(changedDate, tasks) : cloudDeleteDay(changedDate);
+    fn.then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
+  }, []);
+
+  const persistAch = useCallback((newAch) => {
+    setAchievements(newAch); saveLocalAch(newAch); setSyncStatus("syncing");
+    cloudSaveAch(newAch).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
   }, []);
 
   const todayTasks = entries[selectedDate] || [];
@@ -391,8 +651,35 @@ function WorkLog() {
     setSelectedDate(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`);
     setShowForm(false); setEditingTask(null);
   };
+  const handleSaveAch = (item) => {
+    const idx = achievements.findIndex(a => a.id === item.id);
+    persistAch(idx >= 0 ? achievements.map(a => a.id === item.id ? item : a) : [...achievements, item]);
+  };
+  const handleDeleteAch = (id) => persistAch(achievements.filter(a => a.id !== id));
 
   const totalMins = todayTasks.reduce((s, t) => s + (t.minutes || (t.hours ? Math.round(t.hours * 60) : 0)), 0);
+
+  const NavBar = () => (
+    <div style={{
+      position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)",
+      width: "100%", maxWidth: 520, background: "#fff", borderTop: "1px solid #e2e8f0",
+      display: "flex", zIndex: 100, paddingBottom: "env(safe-area-inset-bottom)",
+    }}>
+      {[
+        { id: "daily", icon: "📋", label: "日報" },
+        { id: "achievements", icon: "🏆", label: "成果物" },
+        { id: "monthly", icon: "📊", label: "月次" },
+      ].map(tab => (
+        <button key={tab.id} onClick={() => { setView(tab.id); setShowForm(false); setEditingTask(null); }} style={{
+          flex: 1, padding: "10px 0 8px", border: "none", background: "none", cursor: "pointer",
+          color: view === tab.id ? "#2563eb" : "#94a3b8",
+        }}>
+          <div style={{ fontSize: 20 }}>{tab.icon}</div>
+          <div style={{ fontSize: 10, fontWeight: view === tab.id ? 700 : 500, marginTop: 2 }}>{tab.label}</div>
+        </button>
+      ))}
+    </div>
+  );
 
   if (!loaded) {
     return (
@@ -405,27 +692,27 @@ function WorkLog() {
     );
   }
 
-  if (view === "monthly") {
-    return (
-      <div style={{ minHeight: "100vh", background: "#f5f7fb", padding: "16px 16px 100px", maxWidth: 520, margin: "0 auto" }}>
-        <MonthlyView entries={entries} onBack={() => setView("daily")} />
-      </div>
-    );
-  }
+  if (view === "monthly") return (
+    <div style={{ minHeight: "100vh", background: "#f5f7fb", maxWidth: 520, margin: "0 auto" }}>
+      <div style={{ padding: "16px 16px 100px" }}><MonthlyView entries={entries} achievements={achievements} onBack={() => setView("daily")} /></div>
+      <NavBar />
+    </div>
+  );
+
+  if (view === "achievements") return (
+    <div style={{ minHeight: "100vh", background: "#f5f7fb", maxWidth: 520, margin: "0 auto" }}>
+      <AchievementsView achievements={achievements} onSave={handleSaveAch} onDelete={handleDeleteAch} />
+      <NavBar />
+    </div>
+  );
 
   return (
     <div style={{ minHeight: "100vh", background: "#f5f7fb", padding: "0 0 100px", maxWidth: 520, margin: "0 auto" }}>
       <div style={{ background: "linear-gradient(135deg, #1e3a5f, #2563eb)", padding: "24px 18px 20px", borderRadius: "0 0 24px 24px", color: "#fff", marginBottom: 18 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <div>
-            <div style={{ fontSize: 11, opacity: 0.7, fontWeight: 500, letterSpacing: 1 }}>DAILY WORK LOG</div>
-            <div style={{ fontSize: 20, fontWeight: 800, marginTop: 2 }}>業務日報</div>
-            <div style={{ marginTop: 4 }}><SyncBadge status={syncStatus} /></div>
-          </div>
-          <button onClick={() => setView("monthly")} style={{
-            background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.25)", borderRadius: 10,
-            padding: "8px 14px", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer",
-          }}>📊 月次レポート</button>
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 11, opacity: 0.7, fontWeight: 500, letterSpacing: 1 }}>DAILY WORK LOG</div>
+          <div style={{ fontSize: 20, fontWeight: 800, marginTop: 2 }}>業務日報</div>
+          <div style={{ marginTop: 4 }}><SyncBadge status={syncStatus} /></div>
         </div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(255,255,255,0.12)", borderRadius: 14, padding: "10px 14px" }}>
           <button onClick={() => changeDate(-1)} style={{ background: "none", border: "none", color: "#fff", fontSize: 20, cursor: "pointer", padding: "0 8px" }}>‹</button>
@@ -465,11 +752,12 @@ function WorkLog() {
 
       {selectedDate !== getToday() && (
         <button onClick={() => { setSelectedDate(getToday()); setShowForm(false); setEditingTask(null); }} style={{
-          position: "fixed", bottom: 20, right: 20, background: "#2563eb", color: "#fff", border: "none",
+          position: "fixed", bottom: 72, right: 20, background: "#2563eb", color: "#fff", border: "none",
           borderRadius: 50, width: 52, height: 52, fontSize: 12, fontWeight: 800, cursor: "pointer",
           boxShadow: "0 4px 16px rgba(37,99,235,0.35)", display: "flex", alignItems: "center", justifyContent: "center",
         }}>今日</button>
       )}
+      <NavBar />
     </div>
   );
 }
