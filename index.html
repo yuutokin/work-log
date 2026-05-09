@@ -218,38 +218,61 @@ function TaskForm({ onSave, onCancel, initialData }) {
 }
 
 // ─── MonthlyView ───
-function MonthlyView({ entries, onBack }) {
+function MonthlyView({ entries, achievements, onBack }) {
   const categoryMap = {}; CATEGORIES.forEach((c) => (categoryMap[c.id] = c));
+  const achTypeMap = {}; 
   const [copiedMonth, setCopiedMonth] = useState("");
   const months = {};
   Object.keys(entries).sort().reverse().forEach((date) => { const mk = getMonthKey(date); if (!months[mk]) months[mk] = {}; months[mk][date] = entries[date]; });
+
+  // Also collect months from achievements
+  (achievements || []).forEach((a) => { const mk = getMonthKey(a.date); if (!months[mk]) months[mk] = {}; });
   const monthKeys = Object.keys(months).sort().reverse();
 
   function getMonthStats(me) {
-    let totalTasks = 0, totalMins = 0; const catCount = {};
-    Object.values(me).forEach((dt) => dt.forEach((t) => { totalTasks++; const m = t.minutes || (t.hours ? Math.round(t.hours * 60) : 0); totalMins += m; catCount[t.category] = (catCount[t.category] || 0) + 1; }));
-    return { totalTasks, totalMins, catCount };
+    let totalTasks = 0, totalMins = 0; const catCount = {}; const catMins = {};
+    Object.values(me).forEach((dt) => dt.forEach((t) => {
+      totalTasks++;
+      const m = t.minutes || (t.hours ? Math.round(t.hours * 60) : 0);
+      totalMins += m;
+      catCount[t.category] = (catCount[t.category] || 0) + 1;
+      catMins[t.category] = (catMins[t.category] || 0) + m;
+    }));
+    return { totalTasks, totalMins, catCount, catMins };
   }
+
+  function getMonthAch(mk) {
+    return (achievements || []).filter(a => getMonthKey(a.date) === mk);
+  }
+
   function exportCSV(mk) {
-    const md = months[mk], dates = Object.keys(md).sort(), bom = "\uFEFF";
-    const header = "日付,カテゴリ,案件名,詳細メモ,作業時間(分)";
-    const rows = [];
-    dates.forEach((date) => md[date].forEach((t) => {
+    const md = months[mk] || {}, dates = Object.keys(md).sort(), bom = "\uFEFF";
+    const esc = (s) => `"${(s || "").replace(/"/g, '""')}"`;
+    let rows = ["日付,カテゴリ,案件名,詳細メモ,作業時間(分)"];
+    dates.forEach((date) => (md[date] || []).forEach((t) => {
       const cat = categoryMap[t.category]?.label || t.category;
-      const esc = (s) => `"${(s || "").replace(/"/g, '""')}"`;
       const mins = t.minutes || (t.hours ? Math.round(t.hours * 60) : "");
       rows.push([date, esc(cat), esc(t.caseName), esc(t.detail || t.title), mins].join(","));
     }));
-    const blob = new Blob([bom + header + "\n" + rows.join("\n")], { type: "text/csv;charset=utf-8;" });
-    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
-    const [y, m] = mk.split("-"); a.download = `業務日報_${y}年${parseInt(m)}月.csv`; a.click();
+    rows.push(""); rows.push("【成果物】"); rows.push("完成日,種別,タイトル,URL,メモ");
+    getMonthAch(mk).sort((a,b) => a.date.localeCompare(b.date)).forEach(a => {
+      const ATYPES = [{id:"blog",label:"ブログ記事"},{id:"document",label:"書面・起案"},{id:"template",label:"テンプレート"},{id:"manual",label:"マニュアル"},{id:"system",label:"システム・ツール"},{id:"other",label:"その他"}];
+      const t = ATYPES.find(t => t.id === a.type)?.label || a.type;
+      rows.push([a.date, esc(t), esc(a.title), esc(a.url), esc(a.memo)].join(","));
+    });
+    const blob = new Blob([bom + rows.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const el = document.createElement("a"); el.href = URL.createObjectURL(blob);
+    const [y, m] = mk.split("-"); el.download = `業務日報_${y}年${parseInt(m)}月.csv`; el.click();
   }
+
   function copyAsText(mk) {
-    const md = months[mk], dates = Object.keys(md).sort(), [y, m] = mk.split("-"), stats = getMonthStats(md);
+    const md = months[mk] || {}, dates = Object.keys(md).sort(), [y, m] = mk.split("-");
+    const stats = getMonthStats(md);
+    const monthAch = getMonthAch(mk);
     let text = `══════════════════════════\n  業務日報　${parseInt(y)}年${parseInt(m)}月\n  稼働${dates.length}日 ・ ${stats.totalTasks}件 ・ ${formatMinutes(stats.totalMins)}\n══════════════════════════\n\n`;
     dates.forEach((date) => {
       text += `■ ${formatDate(date)}\n──────────────────\n`;
-      md[date].forEach((t, i) => {
+      (md[date] || []).forEach((t, i) => {
         const cat = categoryMap[t.category]?.label || t.category;
         const mins = t.minutes || (t.hours ? Math.round(t.hours * 60) : 0);
         text += `  ${i + 1}. [${cat}]`; if (mins) text += ` ${formatMinutes(mins)}`; text += "\n";
@@ -260,28 +283,73 @@ function MonthlyView({ entries, onBack }) {
       });
     });
     text += `──────────────────\n【カテゴリ別集計】\n`;
-    CATEGORIES.filter((c) => stats.catCount[c.id]).forEach((c) => { text += `  ${c.label}：${stats.catCount[c.id]}件\n`; });
+    CATEGORIES.filter((c) => stats.catCount[c.id]).forEach((c) => {
+      text += `  ${c.label}：${stats.catCount[c.id]}件`;
+      if (stats.catMins[c.id]) text += ` / ${formatMinutes(stats.catMins[c.id])}`;
+      text += "\n";
+    });
+    if (monthAch.length > 0) {
+      const ATYPES = [{id:"blog",label:"ブログ記事",icon:"✍️"},{id:"document",label:"書面・起案",icon:"⚖️"},{id:"template",label:"テンプレート",icon:"📋"},{id:"manual",label:"マニュアル",icon:"📖"},{id:"system",label:"システム・ツール",icon:"🖥️"},{id:"other",label:"その他",icon:"📎"}];
+      text += `\n──────────────────\n【今月の成果物】（${monthAch.length}件）\n`;
+      monthAch.sort((a,b) => a.date.localeCompare(b.date)).forEach((a, i) => {
+        const t = ATYPES.find(t => t.id === a.type) || ATYPES[5];
+        text += `  ${i + 1}. ${t.icon} [${t.label}] ${a.title}\n`;
+        if (a.url) text += `     URL：${a.url}\n`;
+        if (a.memo) text += `     備考：${a.memo}\n`;
+        text += "\n";
+      });
+    }
     navigator.clipboard.writeText(text).then(() => { setCopiedMonth(mk); setTimeout(() => setCopiedMonth(""), 2000); });
+  }
+
+  // ── Bar chart component ──
+  function CategoryChart({ stats }) {
+    const cats = CATEGORIES.filter(c => stats.catMins[c.id] > 0);
+    if (cats.length === 0) return null;
+    const maxMins = Math.max(...cats.map(c => stats.catMins[c.id]));
+    return (
+      <div style={{ marginTop: 14, padding: "14px 16px", background: "#f8fafc", borderRadius: 12 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", marginBottom: 10 }}>カテゴリ別作業時間</div>
+        {cats.sort((a,b) => stats.catMins[b.id] - stats.catMins[a.id]).map(c => {
+          const pct = (stats.catMins[c.id] / maxMins) * 100;
+          return (
+            <div key={c.id} style={{ marginBottom: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                <span style={{ fontSize: 11, color: c.color, fontWeight: 600 }}>{c.icon} {c.label}</span>
+                <span style={{ fontSize: 11, color: "#64748b" }}>{formatMinutes(stats.catMins[c.id])} ({stats.catCount[c.id]}件)</span>
+              </div>
+              <div style={{ background: "#e2e8f0", borderRadius: 4, height: 8, overflow: "hidden" }}>
+                <div style={{ width: `${pct}%`, background: c.color, height: "100%", borderRadius: 4, transition: "width 0.6s ease" }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
   }
 
   const [expandedMonth, setExpandedMonth] = useState(monthKeys[0] || "");
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-        <button onClick={onBack} style={{ background: "#f1f5f9", border: "none", borderRadius: 10, padding: "8px 14px", fontSize: 14, cursor: "pointer", fontWeight: 600, color: "#475569" }}>← 戻る</button>
         <div style={{ fontSize: 18, fontWeight: 800, color: "#1e293b" }}>月次レポート</div>
       </div>
       {monthKeys.length === 0 && <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>まだ記録がありません</div>}
       {monthKeys.map((mk) => {
-        const stats = getMonthStats(months[mk]), isExpanded = expandedMonth === mk, [y, m] = mk.split("-");
-        const dates = Object.keys(months[mk]).sort().reverse();
+        const stats = getMonthStats(months[mk] || {});
+        const isExpanded = expandedMonth === mk, [y, m] = mk.split("-");
+        const dates = Object.keys(months[mk] || {}).filter(d => (months[mk][d] || []).length > 0).sort().reverse();
+        const monthAch = getMonthAch(mk);
         return (
           <div key={mk} style={{ background: "#fff", borderRadius: 16, marginBottom: 14, overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
             <button onClick={() => setExpandedMonth(isExpanded ? "" : mk)} style={{ width: "100%", padding: "16px 18px", background: isExpanded ? "#f0f4ff" : "#fff", border: "none", cursor: "pointer", textAlign: "left" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
                   <div style={{ fontSize: 17, fontWeight: 800, color: "#1e293b" }}>{parseInt(y)}年{parseInt(m)}月</div>
-                  <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>{dates.length}日稼働 ・ {stats.totalTasks}件 ・ {formatMinutes(stats.totalMins)}</div>
+                  <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+                    {dates.length}日稼働 ・ {stats.totalTasks}件 ・ {formatMinutes(stats.totalMins)}
+                    {monthAch.length > 0 && <span style={{ color: "#059669", marginLeft: 8 }}>🏆 成果物{monthAch.length}件</span>}
+                  </div>
                 </div>
                 <span style={{ fontSize: 18, color: "#94a3b8", transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}>▾</span>
               </div>
@@ -293,20 +361,53 @@ function MonthlyView({ entries, onBack }) {
             </button>
             {isExpanded && (
               <div style={{ padding: "0 14px 14px" }}>
-                <div style={{ display: "flex", gap: 8, marginTop: 12, marginBottom: 8 }}>
+                {/* Export buttons */}
+                <div style={{ display: "flex", gap: 8, marginTop: 12, marginBottom: 4 }}>
                   <button onClick={(e) => { e.stopPropagation(); exportCSV(mk); }} style={{ flex: 1, padding: "10px 0", borderRadius: 10, border: "1.5px solid #2563eb", background: "#eff6ff", color: "#2563eb", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📥 CSV</button>
                   <button onClick={(e) => { e.stopPropagation(); copyAsText(mk); }} style={{
-                    flex: 1, padding: "10px 0", borderRadius: 10, border: copiedMonth === mk ? "1.5px solid #059669" : "1.5px solid #64748b",
-                    background: copiedMonth === mk ? "#ecfdf5" : "#f8fafc", color: copiedMonth === mk ? "#059669" : "#475569", fontSize: 13, fontWeight: 700, cursor: "pointer",
+                    flex: 1, padding: "10px 0", borderRadius: 10,
+                    border: copiedMonth === mk ? "1.5px solid #059669" : "1.5px solid #64748b",
+                    background: copiedMonth === mk ? "#ecfdf5" : "#f8fafc",
+                    color: copiedMonth === mk ? "#059669" : "#475569", fontSize: 13, fontWeight: 700, cursor: "pointer",
                   }}>{copiedMonth === mk ? "✓ コピー済み" : "📋 テキストコピー"}</button>
                 </div>
+
+                {/* Graph */}
+                <CategoryChart stats={stats} />
+
+                {/* Achievements section */}
+                {monthAch.length > 0 && (
+                  <div style={{ marginTop: 16 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#059669", marginBottom: 8, paddingBottom: 4, borderBottom: "1px solid #d1fae5" }}>
+                      🏆 今月の成果物（{monthAch.length}件）
+                    </div>
+                    {monthAch.sort((a,b) => a.date.localeCompare(b.date)).map(a => {
+                      const ATYPES = [{id:"blog",label:"ブログ記事",icon:"✍️",color:"#d97706"},{id:"document",label:"書面・起案",icon:"⚖️",color:"#dc2626"},{id:"template",label:"テンプレート",icon:"📋",color:"#2563eb"},{id:"manual",label:"マニュアル",icon:"📖",color:"#0891b2"},{id:"system",label:"システム・ツール",icon:"🖥️",color:"#059669"},{id:"other",label:"その他",icon:"📎",color:"#78716c"}];
+                      const t = ATYPES.find(t => t.id === a.type) || ATYPES[5];
+                      return (
+                        <div key={a.id} style={{ background: "#f0fdf4", borderRadius: 10, padding: "10px 12px", marginBottom: 8, borderLeft: `3px solid ${t.color}` }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                            <span style={{ fontSize: 10, background: t.color + "18", color: t.color, padding: "1px 7px", borderRadius: 12, fontWeight: 600 }}>{t.icon} {t.label}</span>
+                            <span style={{ fontSize: 10, color: "#94a3b8" }}>{a.date}</span>
+                          </div>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: "#1e293b" }}>
+                            {a.url ? <a href={a.url} target="_blank" rel="noopener noreferrer" style={{ color: "#1e293b", textDecoration: "none" }}>{a.title} <span style={{ fontSize: 10, color: "#2563eb" }}>↗</span></a> : a.title}
+                          </div>
+                          {a.memo && <div style={{ fontSize: 11.5, color: "#64748b", marginTop: 2 }}>{a.memo}</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Daily task list */}
                 {dates.map((date) => (
-                  <div key={date} style={{ marginTop: 12 }}>
+                  <div key={date} style={{ marginTop: 14 }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: "#475569", marginBottom: 8, paddingBottom: 4, borderBottom: "1px solid #f1f5f9" }}>
                       {formatDate(date)}
-                      <span style={{ fontWeight: 500, color: "#94a3b8", marginLeft: 8 }}>{months[mk][date].length}件{(() => { const dm = months[mk][date].reduce((s, t) => s + (t.minutes || (t.hours ? Math.round(t.hours * 60) : 0)), 0); return dm > 0 ? ` ・ ${formatMinutes(dm)}` : ""; })()}</span>
+                      <span style={{ fontWeight: 500, color: "#94a3b8", marginLeft: 8 }}>{(months[mk][date] || []).length}件{(() => { const dm = (months[mk][date] || []).reduce((s, t) => s + (t.minutes || (t.hours ? Math.round(t.hours * 60) : 0)), 0); return dm > 0 ? ` ・ ${formatMinutes(dm)}` : ""; })()}</span>
                     </div>
-                    {months[mk][date].map((task) => <TaskItem key={task.id} task={task} onDelete={() => {}} onEdit={() => {}} categoryMap={categoryMap} readOnly />)}
+                    {(months[mk][date] || []).map((task) => <TaskItem key={task.id} task={task} onDelete={() => {}} onEdit={() => {}} categoryMap={categoryMap} readOnly />)}
                   </div>
                 ))}
               </div>
