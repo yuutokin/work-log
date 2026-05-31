@@ -33,6 +33,7 @@ const CATEGORIES = [
   { id: "client", label: "クライアント対応", icon: "🤝", color: "#7c3aed" },
   { id: "research", label: "調査・リサーチ", icon: "🔍", color: "#0891b2" },
   { id: "court", label: "応訴対応", icon: "⚖️", color: "#dc2626" },
+  { id: "phone", label: "電話対応", icon: "📞", color: "#7c3aed" },
   { id: "internal", label: "社内システム整備", icon: "🖥️", color: "#059669" },
   { id: "blog", label: "ブログ作成", icon: "✏️", color: "#d97706" },
   { id: "misc", label: "その他事務作業", icon: "📎", color: "#78716c" },
@@ -175,11 +176,12 @@ function TaskItem({ task, onDelete, onEdit, categoryMap, readOnly }) {
 }
 
 // ─── TaskForm ───
-function TaskForm({ onSave, onCancel, initialData }) {
+function TaskForm({ onSave, onCancel, initialData, presetMinutes }) {
   const [category, setCategory] = useState(initialData?.category || "");
   const [caseName, setCaseName] = useState(initialData?.caseName || "");
   const [detail, setDetail] = useState(initialData?.detail || initialData?.title || "");
   const [minutes, setMinutes] = useState(() => {
+    if (presetMinutes) return String(presetMinutes);
     if (initialData?.minutes) return String(initialData.minutes);
     if (initialData?.hours) return String(Math.round(initialData.hours * 60));
     return "";
@@ -213,7 +215,10 @@ function TaskForm({ onSave, onCancel, initialData }) {
           onFocus={(e) => e.target.style.borderColor = "#2563eb"} onBlur={(e) => e.target.style.borderColor = "#e2e8f0"} />
       </div>
       <div style={{ marginBottom: 18 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>作業時間</div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>
+          作業時間
+          {presetMinutes && !initialData && <span style={{ marginLeft: 6, fontSize: 10, color: "#2563eb", fontWeight: 500 }}>⏱ ストップウォッチから引き継ぎ</span>}
+        </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{ position: "relative", width: 120 }}>
             <input value={minutes} onChange={(e) => setMinutes(e.target.value.replace(/[^0-9]/g, ""))} placeholder="0"
@@ -704,7 +709,99 @@ function AchievementsView({ achievements, onSave, onDelete, onEdit }) {
     </div>
   );
 }
-// ─── DailySummaryModal ───
+// ─── Stopwatch ───
+function Stopwatch({ onUseTime }) {
+  const [running, setRunning] = useState(false);
+  const [elapsed, setElapsed] = useState(0); // seconds
+  const [laps, setLaps] = useState([]);
+  const intervalRef = React.useRef(null);
+  const startRef = React.useRef(null);
+
+  const start = () => {
+    startRef.current = Date.now() - elapsed * 1000;
+    intervalRef.current = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
+    }, 500);
+    setRunning(true);
+  };
+  const pause = () => { clearInterval(intervalRef.current); setRunning(false); };
+  const reset = () => { clearInterval(intervalRef.current); setRunning(false); setElapsed(0); setLaps([]); };
+  const lap = () => { setLaps(prev => [...prev, elapsed]); };
+
+  useEffect(() => () => clearInterval(intervalRef.current), []);
+
+  const fmt = (s) => {
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    if (h > 0) return `${h}:${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`;
+    return `${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`;
+  };
+  const totalMins = Math.ceil(elapsed / 60);
+
+  return (
+    <div style={{ background: "#fff", borderRadius: 16, padding: "16px", marginBottom: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", marginBottom: 10, letterSpacing: 1 }}>⏱ ストップウォッチ</div>
+
+      {/* Timer display */}
+      <div style={{ textAlign: "center", marginBottom: 14 }}>
+        <div style={{
+          fontSize: 44, fontWeight: 800, letterSpacing: 2, fontFamily: "monospace",
+          color: running ? "#2563eb" : elapsed > 0 ? "#1e293b" : "#cbd5e1",
+          transition: "color 0.3s",
+        }}>{fmt(elapsed)}</div>
+        {elapsed > 0 && <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>≈ {totalMins}分</div>}
+      </div>
+
+      {/* Controls */}
+      <div style={{ display: "flex", gap: 8, marginBottom: laps.length > 0 ? 10 : 0 }}>
+        {!running ? (
+          <button onClick={start} style={{
+            flex: 2, padding: "11px 0", borderRadius: 12, border: "none",
+            background: "#2563eb", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer",
+          }}>{elapsed > 0 ? "▶ 再開" : "▶ スタート"}</button>
+        ) : (
+          <button onClick={pause} style={{
+            flex: 2, padding: "11px 0", borderRadius: 12, border: "none",
+            background: "#f59e0b", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer",
+          }}>⏸ 一時停止</button>
+        )}
+        {running && (
+          <button onClick={lap} style={{
+            flex: 1, padding: "11px 0", borderRadius: 12, border: "1.5px solid #e2e8f0",
+            background: "#f8fafc", color: "#475569", fontSize: 13, fontWeight: 700, cursor: "pointer",
+          }}>🔖 ラップ</button>
+        )}
+        {elapsed > 0 && !running && (
+          <>
+            <button onClick={() => { onUseTime(totalMins); reset(); }} style={{
+              flex: 2, padding: "11px 0", borderRadius: 12, border: "none",
+              background: "#059669", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer",
+            }}>✓ {totalMins}分を記録に使う</button>
+            <button onClick={reset} style={{
+              flex: 1, padding: "11px 0", borderRadius: 12, border: "1.5px solid #e2e8f0",
+              background: "#f8fafc", color: "#94a3b8", fontSize: 13, fontWeight: 600, cursor: "pointer",
+            }}>リセット</button>
+          </>
+        )}
+      </div>
+
+      {/* Laps */}
+      {laps.length > 0 && (
+        <div style={{ background: "#f8fafc", borderRadius: 10, padding: "8px 12px" }}>
+          {laps.map((l, i) => {
+            const prev = i > 0 ? laps[i-1] : 0;
+            return (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "3px 0", borderBottom: i < laps.length-1 ? "1px solid #f1f5f9" : "none" }}>
+                <span style={{ color: "#64748b" }}>ラップ {i+1}</span>
+                <span style={{ color: "#475569", fontFamily: "monospace" }}>{fmt(l - prev)}</span>
+                <span style={{ color: "#94a3b8", fontFamily: "monospace" }}>{fmt(l)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 function DailySummaryModal({ date, tasks, existingSummary, categoryMap, onSave, onClose }) {
   const defaultMeet = { name: "", start: "", end: "" };
   const [meets, setMeets] = useState(
@@ -867,6 +964,8 @@ function WorkLog() {
   const [selectedDate, setSelectedDate] = useState(getToday());
   const [showForm, setShowForm] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
+  const [showStopwatch, setShowStopwatch] = useState(false);
+  const [swPresetMins, setSwPresetMins] = useState(null);
   const [editingTask, setEditingTask] = useState(null);
   const [view, setView] = useState("daily");
   const [syncStatus, setSyncStatus] = useState("syncing");
@@ -1020,8 +1119,34 @@ function WorkLog() {
       </div>
 
       <div style={{ padding: "0 16px" }}>
+        {/* ストップウォッチ切り替えボタン */}
+        {!showForm && (
+          <button onClick={() => setShowStopwatch(p => !p)} style={{
+            width: "100%", padding: "10px", borderRadius: 12,
+            border: showStopwatch ? "2px solid #2563eb" : "2px solid #e2e8f0",
+            background: showStopwatch ? "#eff6ff" : "#fff",
+            color: showStopwatch ? "#2563eb" : "#94a3b8",
+            fontSize: 13, fontWeight: 600, cursor: "pointer", marginBottom: 10,
+          }}>⏱ {showStopwatch ? "ストップウォッチを閉じる" : "ストップウォッチを開く"}</button>
+        )}
+
+        {/* ストップウォッチ */}
+        {showStopwatch && !showForm && (
+          <Stopwatch onUseTime={(mins) => {
+            setSwPresetMins(mins);
+            setEditingTask(null);
+            setShowForm(true);
+            setShowStopwatch(false);
+          }} />
+        )}
+
         {showForm ? (
-          <TaskForm onSave={handleSave} onCancel={() => { setShowForm(false); setEditingTask(null); }} initialData={editingTask} />
+          <TaskForm
+            onSave={(task) => { handleSave(task); setSwPresetMins(null); }}
+            onCancel={() => { setShowForm(false); setEditingTask(null); setSwPresetMins(null); }}
+            initialData={editingTask}
+            presetMinutes={swPresetMins}
+          />
         ) : (
           <button onClick={() => { setEditingTask(null); setShowForm(true); }} style={{
             width: "100%", padding: "14px", borderRadius: 14, border: "2px dashed #cbd5e1",
