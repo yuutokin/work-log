@@ -102,6 +102,27 @@ async function cloudDeleteDay(date) {
   } catch (e) { console.error("Cloud delete error:", e); }
 }
 
+const GCHAT_WEBHOOK = "https://chat.googleapis.com/v1/spaces/AAQApCjTiIo/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=Q7SUAuHezC9riRPYcaZstj-qozu1MERZeruc2AOHIwU";
+const SUMMARY_LOCAL_KEY = "worklog-summaries";
+function loadLocalSummaries() { try { return JSON.parse(localStorage.getItem(SUMMARY_LOCAL_KEY)) || []; } catch { return []; } }
+function saveLocalSummaries(s) { localStorage.setItem(SUMMARY_LOCAL_KEY, JSON.stringify(s)); }
+async function cloudFetchSummaries() {
+  try { const d = await jsonp(GAS_URL + "?action=fetchSummaries"); if (d.success) return d.summaries; } catch {}
+  return null;
+}
+async function cloudSaveSummaries(summaries) {
+  try { const payload = encodeURIComponent(JSON.stringify({ summaries })); await jsonp(GAS_URL + "?action=saveSummaries&payload=" + payload); } catch {}
+}
+async function sendToGoogleChat(text) {
+  try {
+    await fetch(GCHAT_WEBHOOK, {
+      method: "POST", mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+  } catch(e) { console.error("GChat error:", e); }
+}
+
 // ─── SyncStatus indicator ───
 function SyncBadge({ status }) {
   const colors = { synced: "#059669", syncing: "#d97706", offline: "#94a3b8", error: "#dc2626", nourl: "#94a3b8" };
@@ -683,11 +704,169 @@ function AchievementsView({ achievements, onSave, onDelete, onEdit }) {
     </div>
   );
 }
+// ─── DailySummaryModal ───
+function DailySummaryModal({ date, tasks, existingSummary, categoryMap, onSave, onClose }) {
+  const defaultMeet = { name: "", start: "", end: "" };
+  const [meets, setMeets] = useState(
+    existingSummary?.meets?.length ? existingSummary.meets : [{ ...defaultMeet }]
+  );
+  const [comment, setComment] = useState(existingSummary?.comment || "");
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const totalMins = tasks.reduce((s, t) => s + (t.minutes || (t.hours ? Math.round(t.hours * 60) : 0)), 0);
+
+  // Calculate duration in minutes from HH:MM strings
+  function calcMeetMins(start, end) {
+    if (!start || !end) return 0;
+    const [sh, sm] = start.split(":").map(Number);
+    const [eh, em] = end.split(":").map(Number);
+    const diff = (eh * 60 + em) - (sh * 60 + sm);
+    return diff > 0 ? diff : 0;
+  }
+
+  function updateMeet(idx, field, value) {
+    setMeets(prev => prev.map((m, i) => i === idx ? { ...m, [field]: value } : m));
+  }
+  function addMeet() { setMeets(prev => [...prev, { ...defaultMeet }]); }
+  function removeMeet(idx) { setMeets(prev => prev.filter((_, i) => i !== idx)); }
+
+  const validMeets = meets.filter(m => m.start && m.end && calcMeetMins(m.start, m.end) > 0);
+  const totalMeetMins = validMeets.reduce((s, m) => s + calcMeetMins(m.start, m.end), 0);
+
+  function buildText() {
+    const catMap = {};
+    tasks.forEach(t => {
+      if (!catMap[t.category]) catMap[t.category] = { mins: 0, items: [] };
+      catMap[t.category].mins += t.minutes || (t.hours ? Math.round(t.hours * 60) : 0);
+      const content = t.detail || t.title || "";
+      if (content) catMap[t.category].items.push((t.caseName ? `【${t.caseName}】` : "") + content);
+    });
+    let text = `━━━━━━━━━━━━━━━━━━━━━━\n📋 業務日報　${formatDate(date)}\n━━━━━━━━━━━━━━━━━━━━━━\n\n【本日の業務】\n`;
+    CATEGORIES.filter(c => catMap[c.id]).forEach(c => {
+      const d = catMap[c.id];
+      text += `\n${c.icon} ${c.label}${d.mins ? `（${formatMinutes(d.mins)}）` : ""}\n`;
+      d.items.forEach(item => { text += `  ・${item}\n`; });
+    });
+    text += `\n合計作業時間：${formatMinutes(totalMins)}\n`;
+    if (validMeets.length > 0) {
+      text += `\n【Google Meet参加】（合計 ${formatMinutes(totalMeetMins)}）\n`;
+      validMeets.forEach(m => {
+        const mins = calcMeetMins(m.start, m.end);
+        text += `  ・${m.start}〜${m.end}（${formatMinutes(mins)}）`;
+        if (m.name) text += ` ${m.name}`;
+        text += "\n";
+      });
+    }
+    if (comment.trim()) text += `\n【一言】\n${comment.trim()}\n`;
+    text += `━━━━━━━━━━━━━━━━━━━━━━`;
+    return text;
+  }
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(buildText()).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+  };
+  const handleSendAndSave = async () => {
+    setSending(true);
+    await sendToGoogleChat(buildText());
+    onSave({ date, meets, totalMeetMins, comment: comment.trim(), sentAt: new Date().toISOString() });
+    setSending(false); setSent(true); setTimeout(() => setSent(false), 2000);
+  };
+
+  const inp = { padding: "8px 10px", borderRadius: 8, border: "1.5px solid #e2e8f0", fontSize: 13, outline: "none", boxSizing: "border-box", fontFamily: "inherit", background: "#fff" };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={onClose}>
+      <div style={{ background: "#fff", borderRadius: "20px 20px 0 0", width: "100%", maxWidth: 520, maxHeight: "92vh", overflowY: "auto", padding: "24px 20px 44px" }} onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#1e293b" }}>📝 日報まとめ</div>
+            <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>{formatDate(date)}</div>
+          </div>
+          <button onClick={onClose} style={{ background: "#f1f5f9", border: "none", borderRadius: 8, width: 32, height: 32, fontSize: 16, cursor: "pointer", color: "#64748b" }}>×</button>
+        </div>
+
+        {/* Preview */}
+        <div style={{ background: "#f8fafc", borderRadius: 12, padding: 14, marginBottom: 16, fontSize: 11.5, lineHeight: 1.8, color: "#334155", fontFamily: "monospace", whiteSpace: "pre-wrap", maxHeight: 160, overflowY: "auto" }}>
+          {buildText()}
+        </div>
+
+        {/* Google Meet セクション */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b" }}>
+              📹 Google Meet参加
+              {totalMeetMins > 0 && <span style={{ color: "#2563eb", marginLeft: 6 }}>合計 {formatMinutes(totalMeetMins)}</span>}
+            </div>
+            <button onClick={addMeet} style={{ background: "#eff6ff", border: "none", borderRadius: 8, padding: "4px 10px", fontSize: 12, fontWeight: 700, color: "#2563eb", cursor: "pointer" }}>＋ 追加</button>
+          </div>
+
+          {meets.map((m, idx) => {
+            const mins = calcMeetMins(m.start, m.end);
+            return (
+              <div key={idx} style={{ background: "#f8fafc", borderRadius: 12, padding: 12, marginBottom: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  {/* 開始時間 */}
+                  <input type="time" value={m.start} onChange={e => updateMeet(idx, "start", e.target.value)}
+                    style={{ ...inp, width: 100, textAlign: "center" }} />
+                  <span style={{ fontSize: 12, color: "#94a3b8", flexShrink: 0 }}>〜</span>
+                  {/* 終了時間 */}
+                  <input type="time" value={m.end} onChange={e => updateMeet(idx, "end", e.target.value)}
+                    style={{ ...inp, width: 100, textAlign: "center" }} />
+                  {/* 時間表示 */}
+                  {mins > 0 && <span style={{ fontSize: 11, color: "#2563eb", fontWeight: 600, flexShrink: 0 }}>{formatMinutes(mins)}</span>}
+                  {/* 削除 */}
+                  {meets.length > 1 && (
+                    <button onClick={() => removeMeet(idx)} style={{ marginLeft: "auto", background: "none", border: "none", fontSize: 16, color: "#94a3b8", cursor: "pointer", flexShrink: 0 }}>×</button>
+                  )}
+                </div>
+                {/* 会議名 */}
+                <input value={m.name} onChange={e => updateMeet(idx, "name", e.target.value)}
+                  placeholder="会議名（例：週次MTG、〇〇様打合せ）"
+                  style={{ ...inp, width: "100%", fontSize: 12 }}
+                  onFocus={e => e.target.style.borderColor = "#2563eb"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Comment */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>一言・感想</div>
+          <textarea value={comment} onChange={e => setComment(e.target.value)}
+            placeholder="今日の振り返り、気づき、明日への引き継ぎなど" rows={3}
+            style={{ width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box", fontFamily: "inherit", resize: "vertical", lineHeight: 1.6 }}
+            onFocus={e => e.target.style.borderColor = "#2563eb"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+        </div>
+
+        {/* Actions */}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={handleCopy} style={{
+            flex: 1, padding: "12px 0", borderRadius: 12,
+            border: copied ? "1.5px solid #059669" : "1.5px solid #64748b",
+            background: copied ? "#ecfdf5" : "#f8fafc",
+            color: copied ? "#059669" : "#475569", fontSize: 13, fontWeight: 700, cursor: "pointer",
+          }}>{copied ? "✓ コピー済み" : "📋 コピー"}</button>
+          <button onClick={handleSendAndSave} disabled={sending} style={{
+            flex: 2, padding: "12px 0", borderRadius: 12, border: "none",
+            background: sent ? "#059669" : sending ? "#94a3b8" : "#2563eb",
+            color: "#fff", fontSize: 13, fontWeight: 700, cursor: sending ? "default" : "pointer",
+          }}>{sent ? "✓ 完了" : sending ? "送信中…" : "💬 Google Chatに送信して保存"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WorkLog() {
   const [entries, setEntries] = useState({});
   const [achievements, setAchievements] = useState([]);
+  const [summaries, setSummaries] = useState([]);
   const [selectedDate, setSelectedDate] = useState(getToday());
   const [showForm, setShowForm] = useState(false);
+  const [showSummary, setShowSummary] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const [view, setView] = useState("daily");
   const [syncStatus, setSyncStatus] = useState("syncing");
@@ -696,9 +875,10 @@ function WorkLog() {
 
   useEffect(() => {
     setSyncStatus("syncing");
-    Promise.all([cloudFetch(), cloudFetchAch()]).then(([cloud, cloudAch]) => {
+    Promise.all([cloudFetch(), cloudFetchAch(), cloudFetchSummaries()]).then(([cloud, cloudAch, cloudSum]) => {
       if (cloud) { setEntries(cloud); saveLocal(cloud); } else { setEntries(loadLocal()); }
       if (cloudAch) { setAchievements(cloudAch); saveLocalAch(cloudAch); } else { setAchievements(loadLocalAch()); }
+      if (cloudSum) { setSummaries(cloudSum); saveLocalSummaries(cloudSum); } else { setSummaries(loadLocalSummaries()); }
       setSyncStatus(cloud ? "synced" : "offline");
       setLoaded(true);
     });
@@ -708,9 +888,10 @@ function WorkLog() {
     function onVisible() {
       if (document.visibilityState === "visible") {
         setSyncStatus("syncing");
-        Promise.all([cloudFetch(), cloudFetchAch()]).then(([cloud, cloudAch]) => {
+        Promise.all([cloudFetch(), cloudFetchAch(), cloudFetchSummaries()]).then(([cloud, cloudAch, cloudSum]) => {
           if (cloud) { setEntries(cloud); saveLocal(cloud); }
           if (cloudAch) { setAchievements(cloudAch); saveLocalAch(cloudAch); }
+          if (cloudSum) { setSummaries(cloudSum); saveLocalSummaries(cloudSum); }
           setSyncStatus(cloud ? "synced" : "offline");
         });
       }
@@ -725,6 +906,12 @@ function WorkLog() {
     const fn = tasks.length > 0 ? cloudSaveDay(changedDate, tasks) : cloudDeleteDay(changedDate);
     fn.then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
   }, []);
+
+  const persistSummary = useCallback((summary) => {
+    const newSummaries = [...summaries.filter(s => s.date !== summary.date), summary];
+    setSummaries(newSummaries); saveLocalSummaries(newSummaries);
+    cloudSaveSummaries(newSummaries).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
+  }, [summaries]);
 
   const persistAch = useCallback((newAch) => {
     setAchievements(newAch); saveLocalAch(newAch); setSyncStatus("syncing");
@@ -849,7 +1036,31 @@ function WorkLog() {
           </div>
         )}
         {todayTasks.map((task) => <TaskItem key={task.id} task={task} onDelete={handleDelete} onEdit={handleEdit} categoryMap={categoryMap} />)}
+
+        {/* 日報まとめボタン */}
+        {todayTasks.length > 0 && !showForm && (
+          <button onClick={() => setShowSummary(true)} style={{
+            width: "100%", padding: "13px", borderRadius: 14, border: "none",
+            background: summaries.find(s => s.date === selectedDate) ? "#ecfdf5" : "linear-gradient(135deg, #1e3a5f, #2563eb)",
+            color: summaries.find(s => s.date === selectedDate) ? "#059669" : "#fff",
+            fontSize: 14, fontWeight: 700, cursor: "pointer", marginTop: 8,
+          }}>
+            {summaries.find(s => s.date === selectedDate) ? "✓ 日報まとめ済み（再編集）" : "📝 日報まとめを作成"}
+          </button>
+        )}
       </div>
+
+      {/* モーダル */}
+      {showSummary && (
+        <DailySummaryModal
+          date={selectedDate}
+          tasks={todayTasks}
+          existingSummary={summaries.find(s => s.date === selectedDate)}
+          categoryMap={categoryMap}
+          onSave={(summary) => { persistSummary(summary); setShowSummary(false); }}
+          onClose={() => setShowSummary(false)}
+        />
+      )}
 
       {selectedDate !== getToday() && (
         <button onClick={() => { setSelectedDate(getToday()); setShowForm(false); setEditingTask(null); }} style={{
