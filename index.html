@@ -811,7 +811,8 @@ function DailySummaryModal({ date, tasks, existingSummary, categoryMap, onSave, 
       if (!catMap[t.category]) catMap[t.category] = { mins: 0, items: [] };
       catMap[t.category].mins += t.minutes || (t.hours ? Math.round(t.hours * 60) : 0);
       const content = t.detail || t.title || "";
-      if (content) catMap[t.category].items.push((t.caseName ? `【${t.caseName}】` : "") + content);
+      const taskMins = t.minutes || (t.hours ? Math.round(t.hours * 60) : 0);
+      if (content) catMap[t.category].items.push((t.caseName ? `【${t.caseName}】` : "") + content + (taskMins ? `（${formatMinutes(taskMins)}）` : ""));
     });
     let text = `━━━━━━━━━━━━━━━━━━━━━━\n📋 業務日報　${formatDate(date)}\n━━━━━━━━━━━━━━━━━━━━━━\n\n【本日の業務】\n`;
     CATEGORIES.filter(c => catMap[c.id]).forEach(c => {
