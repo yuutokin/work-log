@@ -88,12 +88,19 @@ async function cloudFetch() {
   return null;
 }
 
-async function cloudSaveDay(date, tasks) {
+async function cloudSaveTask(date, task) {
   if (!GAS_URL) return;
   try {
-    const payload = encodeURIComponent(JSON.stringify({ date, tasks }));
-    await jsonp(GAS_URL + "?action=saveDayTasks&payload=" + payload);
+    const payload = encodeURIComponent(JSON.stringify({ date, task }));
+    await jsonp(GAS_URL + "?action=saveTask&payload=" + payload);
   } catch (e) { console.error("Cloud save error:", e); }
+}
+
+async function cloudDeleteTask(taskId) {
+  if (!GAS_URL) return;
+  try {
+    await jsonp(GAS_URL + "?action=deleteTask&id=" + encodeURIComponent(taskId));
+  } catch (e) { console.error("Cloud delete error:", e); }
 }
 
 async function cloudDeleteDay(date) {
@@ -997,13 +1004,16 @@ function WorkLog() {
     const idx = dt.findIndex((t) => t.id === task.id);
     if (idx >= 0) dt[idx] = task; else dt.push(task);
     ne[selectedDate] = dt;
-    persist(ne, selectedDate); setShowForm(false); setEditingTask(null);
+    setEntries(ne); saveLocal(ne); setSyncStatus("syncing");
+    cloudSaveTask(selectedDate, task).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
+    setShowForm(false); setEditingTask(null);
   };
   const handleDelete = (taskId) => {
     const ne = { ...entries };
     ne[selectedDate] = (ne[selectedDate] || []).filter((t) => t.id !== taskId);
     if (ne[selectedDate].length === 0) delete ne[selectedDate];
-    persist(ne, selectedDate);
+    setEntries(ne); saveLocal(ne); setSyncStatus("syncing");
+    cloudDeleteTask(taskId).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
   };
   const handleEdit = (task) => { setEditingTask(task); setShowForm(true); };
   const changeDate = (delta) => {
