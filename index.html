@@ -113,7 +113,7 @@ async function cloudDeleteDay(date) {
   } catch (e) { console.error("Cloud delete error:", e); }
 }
 
-const GCHAT_WEBHOOK = "https://chat.googleapis.com/v1/spaces/AAQApCjTiIo/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=Q7SUAuHezC9riRPYcaZstj-qozu1MERZeruc2AOHIwU";
+const GCHAT_WEBHOOK = "https://chat.googleapis.com/v1/spaces/AAQAKwqo4bc/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=fSrFTRpB_IFv2VfB5d2_2cz4cE5ouwjTfUGULJAxIxY";
 const SUMMARY_LOCAL_KEY = "worklog-summaries";
 function loadLocalSummaries() { try { return JSON.parse(localStorage.getItem(SUMMARY_LOCAL_KEY)) || []; } catch { return []; } }
 function saveLocalSummaries(s) { localStorage.setItem(SUMMARY_LOCAL_KEY, JSON.stringify(s)); }
