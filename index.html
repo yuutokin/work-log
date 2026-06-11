@@ -113,6 +113,22 @@ async function cloudDeleteDay(date) {
   } catch (e) { console.error("Cloud delete error:", e); }
 }
 
+const TODO_LOCAL_KEY = "worklog-todos";
+function loadLocalTodos() { try { return JSON.parse(localStorage.getItem(TODO_LOCAL_KEY)) || []; } catch { return []; } }
+function saveLocalTodos(t) { localStorage.setItem(TODO_LOCAL_KEY, JSON.stringify(t)); }
+async function cloudFetchTodos() {
+  try { const d = await jsonp(GAS_URL + "?action=fetchTodos"); if (d.success) return d.todos; } catch {}
+  return null;
+}
+async function cloudSaveTodos(todos) {
+  try { const payload = encodeURIComponent(JSON.stringify({ todos })); await jsonp(GAS_URL + "?action=saveTodos&payload=" + payload); } catch {}
+}
+
+async function cloudFetchCalendar(date) {
+  try { const d = await jsonp(GAS_URL + "?action=fetchCalendar&date=" + encodeURIComponent(date)); if (d.success) return d.events; } catch {}
+  return null;
+}
+
 const GCHAT_WEBHOOK = "https://chat.googleapis.com/v1/spaces/AAQAKwqo4bc/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=fSrFTRpB_IFv2VfB5d2_2cz4cE5ouwjTfUGULJAxIxY";
 const SUMMARY_LOCAL_KEY = "worklog-summaries";
 function loadLocalSummaries() { try { return JSON.parse(localStorage.getItem(SUMMARY_LOCAL_KEY)) || []; } catch { return []; } }
@@ -942,13 +958,303 @@ function DailySummaryModal({ date, tasks, existingSummary, categoryMap, onSave, 
   );
 }
 
+// ─── TodoItem ───
+function TodoItem({ todo, onToggle, onDelete, onEdit, compact }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const today = getToday();
+  const isOverdue = todo.deadline && todo.deadline < today && !todo.done;
+  const isToday = todo.deadline === today;
+  const dlColor = todo.done ? "#94a3b8" : isOverdue ? "#dc2626" : isToday ? "#d97706" : "#64748b";
+  return (
+    <div className="fade-in" style={{
+      background: "#fff", borderRadius: 12, padding: compact ? "10px 12px" : "12px 14px", marginBottom: 8,
+      borderLeft: `4px solid ${todo.done ? "#cbd5e1" : isOverdue ? "#dc2626" : isToday ? "#d97706" : "#2563eb"}`,
+      boxShadow: "0 1px 3px rgba(0,0,0,0.04)", position: "relative", opacity: todo.done ? 0.6 : 1,
+    }}>
+      {confirmDelete && (
+        <div style={{ position: "absolute", inset: 0, background: "rgba(255,255,255,0.95)", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, zIndex: 10 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#dc2626" }}>削除しますか？</span>
+          <button onClick={() => { onDelete(todo.id); setConfirmDelete(false); }} style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: "#dc2626", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>削除</button>
+          <button onClick={() => setConfirmDelete(false)} style={{ padding: "5px 12px", borderRadius: 6, border: "1.5px solid #e2e8f0", background: "#fff", color: "#64748b", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>戻る</button>
+        </div>
+      )}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+        <button onClick={() => onToggle(todo.id)} style={{
+          flexShrink: 0, width: 22, height: 22, borderRadius: 6, marginTop: 1,
+          border: todo.done ? "none" : "2px solid #cbd5e1", background: todo.done ? "#059669" : "#fff",
+          color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", padding: 0,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>{todo.done ? "✓" : ""}</button>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: "#1e293b", textDecoration: todo.done ? "line-through" : "none", lineHeight: 1.5 }}>{todo.title}</div>
+          {todo.deadline && (
+            <div style={{ fontSize: 11, color: dlColor, fontWeight: 600, marginTop: 4 }}>
+              📅 {todo.deadline}{isOverdue ? "（期限超過）" : isToday ? "（今日）" : ""}
+            </div>
+          )}
+          {todo.memo && !compact && (
+            <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6, marginTop: 4, whiteSpace: "pre-wrap" }}>{todo.memo}</div>
+          )}
+        </div>
+        {!compact && (
+          <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
+            <button onClick={() => onEdit(todo)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, padding: 2, color: "#94a3b8" }}>✎</button>
+            <button onClick={() => setConfirmDelete(true)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, padding: 2, color: "#94a3b8" }}>×</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── TodoForm ───
+function TodoForm({ onSave, onCancel, initialData }) {
+  const [title, setTitle] = useState(initialData?.title || "");
+  const [deadline, setDeadline] = useState(initialData?.deadline || "");
+  const [memo, setMemo] = useState(initialData?.memo || "");
+  const canSave = title.trim();
+  const inp = { width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box", fontFamily: "inherit" };
+  return (
+    <div className="fade-in" style={{ background: "#fff", borderRadius: 18, padding: 20, boxShadow: "0 8px 32px rgba(0,0,0,0.10)", marginBottom: 16 }}>
+      <div style={{ fontSize: 15, fontWeight: 700, color: "#1e293b", marginBottom: 16 }}>{initialData ? "ToDo編集" : "新しいToDoを追加"}</div>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>タスク名 *</div>
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例：山田様 答弁書作成" style={inp}
+          onFocus={(e) => e.target.style.borderColor = "#7c3aed"} onBlur={(e) => e.target.style.borderColor = "#e2e8f0"} />
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>期限</div>
+        <input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} style={{ ...inp, colorScheme: "light" }}
+          onFocus={(e) => e.target.style.borderColor = "#7c3aed"} onBlur={(e) => e.target.style.borderColor = "#e2e8f0"} />
+      </div>
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>メモ</div>
+        <textarea value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="補足事項、進め方など" rows={3}
+          style={{ ...inp, resize: "vertical", lineHeight: 1.6 }}
+          onFocus={(e) => e.target.style.borderColor = "#7c3aed"} onBlur={(e) => e.target.style.borderColor = "#e2e8f0"} />
+      </div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <button onClick={onCancel} style={{ flex: 1, padding: "12px 0", borderRadius: 12, border: "1.5px solid #e2e8f0", background: "#fff", color: "#64748b", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>キャンセル</button>
+        <button disabled={!canSave} onClick={() => {
+          if (!canSave) return;
+          onSave({ id: initialData?.id || generateId(), title: title.trim(), deadline: deadline || "", memo: memo.trim(), done: initialData?.done || false, createdAt: initialData?.createdAt || new Date().toISOString(), doneAt: initialData?.doneAt || null });
+        }} style={{ flex: 2, padding: "12px 0", borderRadius: 12, border: "none", background: canSave ? "#7c3aed" : "#cbd5e1", color: "#fff", fontSize: 14, fontWeight: 700, cursor: canSave ? "pointer" : "default" }}>
+          {initialData ? "更新する" : "追加する"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── TodayTodoPreview ───
+function TodayTodoPreview({ todos, onToggle, onGoToTodos }) {
+  const today = getToday();
+  const active = todos
+    .filter(t => !t.done && (!t.deadline || t.deadline <= today))
+    .sort((a, b) => { if (!a.deadline && !b.deadline) return 0; if (!a.deadline) return 1; if (!b.deadline) return -1; return a.deadline.localeCompare(b.deadline); });
+  if (active.length === 0) return null;
+  return (
+    <div style={{ background: "#fff", borderRadius: 14, padding: "12px 14px", marginBottom: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#64748b" }}>📌 今日やること ({active.length}件)</div>
+        <button onClick={onGoToTodos} style={{ background: "none", border: "none", fontSize: 11, color: "#7c3aed", fontWeight: 600, cursor: "pointer" }}>すべて見る →</button>
+      </div>
+      {active.slice(0, 5).map(todo => (
+        <TodoItem key={todo.id} todo={todo} onToggle={onToggle} onDelete={() => {}} onEdit={() => {}} compact />
+      ))}
+      {active.length > 5 && (
+        <div style={{ fontSize: 11, color: "#94a3b8", textAlign: "center", marginTop: 4 }}>他{active.length - 5}件…</div>
+      )}
+    </div>
+  );
+}
+
+// ─── TodoView ───
+function TodoView({ todos, onSave, onDelete, onToggle }) {
+  const [showForm, setShowForm] = useState(false);
+  const [editingTodo, setEditingTodo] = useState(null);
+  const [filter, setFilter] = useState("active");
+  const today = getToday();
+  const filtered = todos.filter(t => filter === "active" ? !t.done : filter === "done" ? t.done : true)
+    .sort((a, b) => {
+      if (a.done !== b.done) return a.done ? 1 : -1;
+      if (!a.deadline && !b.deadline) return 0;
+      if (!a.deadline) return 1;
+      if (!b.deadline) return -1;
+      return a.deadline.localeCompare(b.deadline);
+    });
+  const overdueCount = todos.filter(t => !t.done && t.deadline && t.deadline < today).length;
+  const todayCount = todos.filter(t => !t.done && t.deadline === today).length;
+  const activeCount = todos.filter(t => !t.done).length;
+  const handleSave = (todo) => { onSave(todo); setShowForm(false); setEditingTodo(null); };
+  const handleEdit = (todo) => { setEditingTodo(todo); setShowForm(true); };
+  return (
+    <div style={{ padding: "0 0 100px", maxWidth: 520, margin: "0 auto" }}>
+      <div style={{ background: "linear-gradient(135deg, #581c87, #7c3aed)", padding: "24px 18px 20px", borderRadius: "0 0 24px 24px", color: "#fff", marginBottom: 18 }}>
+        <div style={{ fontSize: 11, opacity: 0.7, fontWeight: 500, letterSpacing: 1 }}>TO-DO LIST</div>
+        <div style={{ fontSize: 20, fontWeight: 800, marginTop: 2, marginBottom: 14 }}>タスク管理</div>
+        <div style={{ display: "flex", gap: 16, justifyContent: "center" }}>
+          <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800 }}>{activeCount}</div><div style={{ fontSize: 10, opacity: 0.7 }}>未完了</div></div>
+          <div style={{ width: 1, background: "rgba(255,255,255,0.2)" }} />
+          <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800, color: todayCount > 0 ? "#fde68a" : "#fff" }}>{todayCount}</div><div style={{ fontSize: 10, opacity: 0.7 }}>今日まで</div></div>
+          <div style={{ width: 1, background: "rgba(255,255,255,0.2)" }} />
+          <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800, color: overdueCount > 0 ? "#fecaca" : "#fff" }}>{overdueCount}</div><div style={{ fontSize: 10, opacity: 0.7 }}>期限超過</div></div>
+        </div>
+      </div>
+      <div style={{ padding: "0 16px" }}>
+        {showForm ? (
+          <TodoForm onSave={handleSave} onCancel={() => { setShowForm(false); setEditingTodo(null); }} initialData={editingTodo} />
+        ) : (
+          <button onClick={() => { setEditingTodo(null); setShowForm(true); }} style={{
+            width: "100%", padding: "14px", borderRadius: 14, border: "2px dashed #d8b4fe",
+            background: "#fff", color: "#7c3aed", fontSize: 14, fontWeight: 700, cursor: "pointer", marginBottom: 16,
+          }}>＋ ToDoを追加</button>
+        )}
+        <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+          {[{id:"active",label:"未完了"},{id:"done",label:"完了"},{id:"all",label:"すべて"}].map(f => (
+            <button key={f.id} onClick={() => setFilter(f.id)} style={{
+              flex: 1, padding: "8px 0", borderRadius: 10,
+              border: filter === f.id ? "2px solid #7c3aed" : "2px solid #e2e8f0",
+              background: filter === f.id ? "#faf5ff" : "#fff",
+              color: filter === f.id ? "#7c3aed" : "#64748b", fontSize: 12, fontWeight: 700, cursor: "pointer",
+            }}>{f.label}</button>
+          ))}
+        </div>
+        {filtered.length === 0 && (
+          <div style={{ textAlign: "center", padding: "40px 20px", color: "#94a3b8" }}>
+            <div style={{ fontSize: 36, marginBottom: 10 }}>✨</div>
+            <div style={{ fontSize: 14, fontWeight: 500 }}>{filter === "active" ? "未完了のタスクはありません" : filter === "done" ? "完了したタスクはありません" : "タスクがありません"}</div>
+          </div>
+        )}
+        {filtered.map(todo => (
+          <TodoItem key={todo.id} todo={todo} onToggle={onToggle} onDelete={onDelete} onEdit={handleEdit} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── MorningReportModal ───
+function MorningReportModal({ date, onClose }) {
+  const [events, setEvents] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [goal, setGoal] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    cloudFetchCalendar(date).then(ev => {
+      setEvents(ev || []);
+      setLoading(false);
+    });
+  }, [date]);
+
+  function buildText() {
+    let text = `━━━━━━━━━━━━━━━━━━━━━━\n🌅 業務前日報　${formatDate(date)}\n━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    text += `【本日の予定】\n`;
+    if (!events || events.length === 0) {
+      text += `  予定なし\n`;
+    } else {
+      events.forEach(ev => {
+        if (ev.allDay) text += `  ・[終日] ${ev.title}`;
+        else text += `  ・${ev.start}〜${ev.end} ${ev.title}`;
+        if (ev.location) text += `（${ev.location}）`;
+        text += "\n";
+      });
+    }
+    if (goal.trim()) text += `\n【本日の目標】\n${goal.trim()}\n`;
+    text += `━━━━━━━━━━━━━━━━━━━━━━`;
+    return text;
+  }
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(buildText()).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+  };
+  const handleSend = async () => {
+    setSending(true);
+    await sendToGoogleChat(buildText());
+    setSending(false); setSent(true); setTimeout(() => setSent(false), 2000);
+  };
+
+  const inp = { width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box", fontFamily: "inherit" };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={onClose}>
+      <div style={{ background: "#fff", borderRadius: "20px 20px 0 0", width: "100%", maxWidth: 520, maxHeight: "92vh", overflowY: "auto", padding: "24px 20px 44px" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#1e293b" }}>🌅 業務前日報</div>
+            <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>{formatDate(date)}</div>
+          </div>
+          <button onClick={onClose} style={{ background: "#f1f5f9", border: "none", borderRadius: 8, width: 32, height: 32, fontSize: 16, cursor: "pointer", color: "#64748b" }}>×</button>
+        </div>
+
+        {/* 予定一覧 */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#64748b", marginBottom: 8 }}>📅 本日の予定（Googleカレンダー）</div>
+          <div style={{ background: "#f8fafc", borderRadius: 12, padding: 12, minHeight: 60 }}>
+            {loading && <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", padding: 20 }}>カレンダーを読み込み中…</div>}
+            {!loading && (!events || events.length === 0) && (
+              <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", padding: 16 }}>本日の予定はありません</div>
+            )}
+            {!loading && events && events.length > 0 && events.map((ev, i) => (
+              <div key={i} style={{ background: "#fff", borderRadius: 8, padding: "8px 10px", marginBottom: 6, borderLeft: "3px solid #f59e0b" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                  <span style={{ fontSize: 11, color: "#d97706", fontWeight: 700, fontFamily: "monospace" }}>
+                    {ev.allDay ? "終日" : `${ev.start}〜${ev.end}`}
+                  </span>
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#1e293b" }}>{ev.title}</div>
+                {ev.location && <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>📍 {ev.location}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* 本日の目標 */}
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>🎯 本日の目標</div>
+          <textarea value={goal} onChange={e => setGoal(e.target.value)}
+            placeholder="今日達成したいこと、注力したいタスクなど" rows={3}
+            style={{ ...inp, resize: "vertical", lineHeight: 1.6 }}
+            onFocus={e => e.target.style.borderColor = "#f59e0b"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+        </div>
+
+        {/* プレビュー */}
+        <div style={{ background: "#fffbeb", borderRadius: 12, padding: 14, marginBottom: 16, fontSize: 11.5, lineHeight: 1.8, color: "#334155", fontFamily: "monospace", whiteSpace: "pre-wrap", maxHeight: 180, overflowY: "auto", border: "1px solid #fef3c7" }}>
+          {buildText()}
+        </div>
+
+        {/* Actions */}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={handleCopy} style={{
+            flex: 1, padding: "12px 0", borderRadius: 12,
+            border: copied ? "1.5px solid #059669" : "1.5px solid #64748b",
+            background: copied ? "#ecfdf5" : "#f8fafc",
+            color: copied ? "#059669" : "#475569", fontSize: 13, fontWeight: 700, cursor: "pointer",
+          }}>{copied ? "✓ コピー済み" : "📋 コピー"}</button>
+          <button onClick={handleSend} disabled={sending || loading} style={{
+            flex: 2, padding: "12px 0", borderRadius: 12, border: "none",
+            background: sent ? "#059669" : (sending || loading) ? "#94a3b8" : "#f59e0b",
+            color: "#fff", fontSize: 13, fontWeight: 700, cursor: (sending || loading) ? "default" : "pointer",
+          }}>{sent ? "✓ 完了" : sending ? "送信中…" : "🌅 Google Chatに送信"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WorkLog() {
   const [entries, setEntries] = useState({});
   const [achievements, setAchievements] = useState([]);
   const [summaries, setSummaries] = useState([]);
+  const [todos, setTodos] = useState([]);
   const [selectedDate, setSelectedDate] = useState(getToday());
   const [showForm, setShowForm] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
+  const [showMorning, setShowMorning] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
   const [view, setView] = useState("daily");
   const [syncStatus, setSyncStatus] = useState("syncing");
@@ -957,10 +1263,11 @@ function WorkLog() {
 
   useEffect(() => {
     setSyncStatus("syncing");
-    Promise.all([cloudFetch(), cloudFetchAch(), cloudFetchSummaries()]).then(([cloud, cloudAch, cloudSum]) => {
+    Promise.all([cloudFetch(), cloudFetchAch(), cloudFetchSummaries(), cloudFetchTodos()]).then(([cloud, cloudAch, cloudSum, cloudTodos]) => {
       if (cloud) { setEntries(cloud); saveLocal(cloud); } else { setEntries(loadLocal()); }
       if (cloudAch) { setAchievements(cloudAch); saveLocalAch(cloudAch); } else { setAchievements(loadLocalAch()); }
       if (cloudSum) { setSummaries(cloudSum); saveLocalSummaries(cloudSum); } else { setSummaries(loadLocalSummaries()); }
+      if (cloudTodos) { setTodos(cloudTodos); saveLocalTodos(cloudTodos); } else { setTodos(loadLocalTodos()); }
       setSyncStatus(cloud ? "synced" : "offline");
       setLoaded(true);
     });
@@ -970,10 +1277,11 @@ function WorkLog() {
     function onVisible() {
       if (document.visibilityState === "visible") {
         setSyncStatus("syncing");
-        Promise.all([cloudFetch(), cloudFetchAch(), cloudFetchSummaries()]).then(([cloud, cloudAch, cloudSum]) => {
+        Promise.all([cloudFetch(), cloudFetchAch(), cloudFetchSummaries(), cloudFetchTodos()]).then(([cloud, cloudAch, cloudSum, cloudTodos]) => {
           if (cloud) { setEntries(cloud); saveLocal(cloud); }
           if (cloudAch) { setAchievements(cloudAch); saveLocalAch(cloudAch); }
           if (cloudSum) { setSummaries(cloudSum); saveLocalSummaries(cloudSum); }
+          if (cloudTodos) { setTodos(cloudTodos); saveLocalTodos(cloudTodos); }
           setSyncStatus(cloud ? "synced" : "offline");
         });
       }
@@ -999,6 +1307,18 @@ function WorkLog() {
     setAchievements(newAch); saveLocalAch(newAch); setSyncStatus("syncing");
     cloudSaveAch(newAch).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
   }, []);
+
+  const persistTodos = useCallback((newTodos) => {
+    setTodos(newTodos); saveLocalTodos(newTodos); setSyncStatus("syncing");
+    cloudSaveTodos(newTodos).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
+  }, []);
+
+  const handleSaveTodo = (todo) => {
+    const idx = todos.findIndex(t => t.id === todo.id);
+    persistTodos(idx >= 0 ? todos.map(t => t.id === todo.id ? todo : t) : [...todos, todo]);
+  };
+  const handleDeleteTodo = (id) => persistTodos(todos.filter(t => t.id !== id));
+  const handleToggleTodo = (id) => persistTodos(todos.map(t => t.id === id ? { ...t, done: !t.done, doneAt: !t.done ? new Date().toISOString() : null } : t));
 
   const todayTasks = entries[selectedDate] || [];
 
@@ -1040,6 +1360,7 @@ function WorkLog() {
     }}>
       {[
         { id: "daily", icon: "📋", label: "日報" },
+        { id: "todos", icon: "✅", label: "ToDo" },
         { id: "achievements", icon: "🏆", label: "成果物" },
         { id: "monthly", icon: "📊", label: "月次" },
       ].map(tab => (
@@ -1068,6 +1389,13 @@ function WorkLog() {
   if (view === "monthly") return (
     <div style={{ minHeight: "100vh", background: "#f5f7fb", maxWidth: 520, margin: "0 auto" }}>
       <div style={{ padding: "16px 16px 100px" }}><MonthlyView entries={entries} achievements={achievements} onBack={() => setView("daily")} /></div>
+      <NavBar />
+    </div>
+  );
+
+  if (view === "todos") return (
+    <div style={{ minHeight: "100vh", background: "#f5f7fb", maxWidth: 520, margin: "0 auto" }}>
+      <TodoView todos={todos} onSave={handleSaveTodo} onDelete={handleDeleteTodo} onToggle={handleToggleTodo} />
       <NavBar />
     </div>
   );
@@ -1105,6 +1433,18 @@ function WorkLog() {
       </div>
 
       <div style={{ padding: "0 16px" }}>
+        {!showForm && <TodayTodoPreview todos={todos} onToggle={handleToggleTodo} onGoToTodos={() => setView("todos")} />}
+
+        {/* 業務前日報ボタン */}
+        {!showForm && selectedDate === getToday() && (
+          <button onClick={() => setShowMorning(true)} style={{
+            width: "100%", padding: "12px", borderRadius: 14,
+            border: "1.5px solid #fbbf24",
+            background: "linear-gradient(135deg, #fef3c7, #fed7aa)",
+            color: "#92400e", fontSize: 13, fontWeight: 700, cursor: "pointer", marginBottom: 12,
+          }}>🌅 業務前日報を作成</button>
+        )}
+
         {showForm ? (
           <TaskForm
             onSave={(task) => { handleSave(task); }}
@@ -1149,6 +1489,9 @@ function WorkLog() {
           onSave={(summary) => { persistSummary(summary); setShowSummary(false); }}
           onClose={() => setShowSummary(false)}
         />
+      )}
+      {showMorning && (
+        <MorningReportModal date={selectedDate} onClose={() => setShowMorning(false)} />
       )}
 
       {selectedDate !== getToday() && (
