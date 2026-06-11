@@ -129,6 +129,17 @@ async function cloudFetchCalendar(date) {
   return null;
 }
 
+const DESTS_LOCAL_KEY = "worklog-mail-dests";
+function loadLocalDests() { try { return JSON.parse(localStorage.getItem(DESTS_LOCAL_KEY)) || []; } catch { return []; } }
+function saveLocalDests(d) { localStorage.setItem(DESTS_LOCAL_KEY, JSON.stringify(d)); }
+async function cloudFetchDests() {
+  try { const d = await jsonp(GAS_URL + "?action=fetchDests"); if (d.success) return d.dests; } catch {}
+  return null;
+}
+async function cloudSaveDests(dests) {
+  try { const payload = encodeURIComponent(JSON.stringify({ dests })); await jsonp(GAS_URL + "?action=saveDests&payload=" + payload); } catch {}
+}
+
 const GCHAT_WEBHOOK = "https://chat.googleapis.com/v1/spaces/AAQAKwqo4bc/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=fSrFTRpB_IFv2VfB5d2_2cz4cE5ouwjTfUGULJAxIxY";
 const SUMMARY_LOCAL_KEY = "worklog-summaries";
 function loadLocalSummaries() { try { return JSON.parse(localStorage.getItem(SUMMARY_LOCAL_KEY)) || []; } catch { return []; } }
@@ -959,16 +970,17 @@ function DailySummaryModal({ date, tasks, existingSummary, categoryMap, onSave, 
 }
 
 // ─── TodoItem ───
-function TodoItem({ todo, onToggle, onDelete, onEdit, compact }) {
+function TodoItem({ todo, onToggle, onDelete, onEdit, onTogglePrint, compact }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const today = getToday();
   const isOverdue = todo.deadline && todo.deadline < today && !todo.done;
   const isToday = todo.deadline === today;
   const dlColor = todo.done ? "#94a3b8" : isOverdue ? "#dc2626" : isToday ? "#d97706" : "#64748b";
+  const isMail = todo.type === "mail";
   return (
     <div className="fade-in" style={{
       background: "#fff", borderRadius: 12, padding: compact ? "10px 12px" : "12px 14px", marginBottom: 8,
-      borderLeft: `4px solid ${todo.done ? "#cbd5e1" : isOverdue ? "#dc2626" : isToday ? "#d97706" : "#2563eb"}`,
+      borderLeft: `4px solid ${todo.done ? "#cbd5e1" : isOverdue ? "#dc2626" : isToday ? "#d97706" : isMail ? "#0891b2" : "#2563eb"}`,
       boxShadow: "0 1px 3px rgba(0,0,0,0.04)", position: "relative", opacity: todo.done ? 0.6 : 1,
     }}>
       {confirmDelete && (
@@ -986,7 +998,30 @@ function TodoItem({ todo, onToggle, onDelete, onEdit, compact }) {
           display: "flex", alignItems: "center", justifyContent: "center",
         }}>{todo.done ? "✓" : ""}</button>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13.5, fontWeight: 600, color: "#1e293b", textDecoration: todo.done ? "line-through" : "none", lineHeight: 1.5 }}>{todo.title}</div>
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: "#1e293b", textDecoration: todo.done ? "line-through" : "none", lineHeight: 1.5 }}>
+            {isMail && <span style={{ fontSize: 10, background: "#cffafe", color: "#0891b2", padding: "1px 6px", borderRadius: 8, marginRight: 6, fontWeight: 700 }}>📮 郵送</span>}
+            {todo.title}
+          </div>
+          {/* 郵送先表示 */}
+          {isMail && todo.destination && (
+            <div style={{ fontSize: 11, color: "#0891b2", fontWeight: 600, marginTop: 4 }}>
+              📍 {todo.destination}
+            </div>
+          )}
+          {/* 郵送タスク用バッジ（一覧から切り替え可能） */}
+          {isMail && !compact && (
+            <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 10, fontWeight: 600,
+                background: todo.isBilling ? "#fef3c7" : "#f1f5f9",
+                color: todo.isBilling ? "#d97706" : "#94a3b8",
+              }}>{todo.isBilling ? "💰 費用請求回" : "通常回"}</span>
+              <button onClick={() => onTogglePrint(todo.id)} style={{
+                fontSize: 10, padding: "2px 8px", borderRadius: 10, fontWeight: 600, cursor: "pointer", border: "none",
+                background: todo.printed ? "#dcfce7" : "#fee2e2",
+                color: todo.printed ? "#059669" : "#dc2626",
+              }}>{todo.printed ? "🖨 印刷済 ↻" : "未印刷 ↻"}</button>
+            </div>
+          )}
           {todo.deadline && (
             <div style={{ fontSize: 11, color: dlColor, fontWeight: 600, marginTop: 4 }}>
               📅 {todo.deadline}{isOverdue ? "（期限超過）" : isToday ? "（今日）" : ""}
@@ -994,6 +1029,12 @@ function TodoItem({ todo, onToggle, onDelete, onEdit, compact }) {
           )}
           {todo.memo && !compact && (
             <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6, marginTop: 4, whiteSpace: "pre-wrap" }}>{todo.memo}</div>
+          )}
+          {todo.chatUrl && !compact && (
+            <a href={todo.chatUrl} target="_blank" rel="noopener noreferrer" style={{
+              display: "inline-flex", alignItems: "center", gap: 4, marginTop: 6,
+              fontSize: 11, color: "#2563eb", textDecoration: "none", fontWeight: 600,
+            }}>💬 Chatスペースを開く ↗</a>
           )}
         </div>
         {!compact && (
@@ -1008,37 +1049,148 @@ function TodoItem({ todo, onToggle, onDelete, onEdit, compact }) {
 }
 
 // ─── TodoForm ───
-function TodoForm({ onSave, onCancel, initialData }) {
+function TodoForm({ onSave, onCancel, initialData, defaultType, dests, onManageDests }) {
+  const [type, setType] = useState(initialData?.type || defaultType || "normal");
   const [title, setTitle] = useState(initialData?.title || "");
   const [deadline, setDeadline] = useState(initialData?.deadline || "");
   const [memo, setMemo] = useState(initialData?.memo || "");
+  const [chatUrl, setChatUrl] = useState(initialData?.chatUrl || "");
+  const [isBilling, setIsBilling] = useState(initialData?.isBilling || false);
+  const [printed, setPrinted] = useState(initialData?.printed || false);
+  const [destination, setDestination] = useState(initialData?.destination || "");
   const canSave = title.trim();
   const inp = { width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box", fontFamily: "inherit" };
+  const themeColor = type === "mail" ? "#0891b2" : "#7c3aed";
   return (
     <div className="fade-in" style={{ background: "#fff", borderRadius: 18, padding: 20, boxShadow: "0 8px 32px rgba(0,0,0,0.10)", marginBottom: 16 }}>
-      <div style={{ fontSize: 15, fontWeight: 700, color: "#1e293b", marginBottom: 16 }}>{initialData ? "ToDo編集" : "新しいToDoを追加"}</div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: "#1e293b", marginBottom: 16 }}>
+        {initialData ? "ToDo編集" : `新しい${type === "mail" ? "郵送" : ""}ToDoを追加`}
+      </div>
+
+      {/* タイプ切替（新規時のみ） */}
+      {!initialData && (
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 8 }}>種類</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={() => setType("normal")} style={{
+              flex: 1, padding: "8px 0", borderRadius: 10,
+              border: type === "normal" ? "2px solid #7c3aed" : "2px solid #e2e8f0",
+              background: type === "normal" ? "#faf5ff" : "#fff",
+              color: type === "normal" ? "#7c3aed" : "#64748b",
+              fontSize: 12, fontWeight: 700, cursor: "pointer",
+            }}>通常タスク</button>
+            <button onClick={() => setType("mail")} style={{
+              flex: 1, padding: "8px 0", borderRadius: 10,
+              border: type === "mail" ? "2px solid #0891b2" : "2px solid #e2e8f0",
+              background: type === "mail" ? "#ecfeff" : "#fff",
+              color: type === "mail" ? "#0891b2" : "#64748b",
+              fontSize: 12, fontWeight: 700, cursor: "pointer",
+            }}>📮 郵送タスク</button>
+          </div>
+        </div>
+      )}
+
       <div style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>タスク名 *</div>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例：山田様 答弁書作成" style={inp}
-          onFocus={(e) => e.target.style.borderColor = "#7c3aed"} onBlur={(e) => e.target.style.borderColor = "#e2e8f0"} />
+        <input value={title} onChange={(e) => setTitle(e.target.value)}
+          placeholder={type === "mail" ? "例：山田様 答弁書送付" : "例：山田様 答弁書作成"} style={inp}
+          onFocus={(e) => e.target.style.borderColor = themeColor} onBlur={(e) => e.target.style.borderColor = "#e2e8f0"} />
       </div>
+
+      {/* 郵送タスクの場合のみ表示 */}
+      {type === "mail" && (
+        <div style={{ background: "#ecfeff", borderRadius: 12, padding: "12px 14px", marginBottom: 14 }}>
+          {/* 郵送先 */}
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#0891b2" }}>郵送先</div>
+              <button type="button" onClick={onManageDests} style={{ background: "none", border: "none", fontSize: 10, color: "#0891b2", fontWeight: 600, cursor: "pointer" }}>選択肢を編集</button>
+            </div>
+            <select value={destination} onChange={(e) => setDestination(e.target.value)}
+              style={{ ...inp, padding: "9px 14px", background: "#fff" }}>
+              <option value="">— 選択してください —</option>
+              {(dests || []).map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#0891b2", marginBottom: 6 }}>郵送回</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => setIsBilling(false)} style={{
+                flex: 1, padding: "7px 0", borderRadius: 8,
+                border: !isBilling ? "2px solid #0891b2" : "2px solid #e2e8f0",
+                background: !isBilling ? "#fff" : "#fafafa",
+                color: !isBilling ? "#0891b2" : "#94a3b8",
+                fontSize: 12, fontWeight: 700, cursor: "pointer",
+              }}>通常回</button>
+              <button onClick={() => setIsBilling(true)} style={{
+                flex: 1, padding: "7px 0", borderRadius: 8,
+                border: isBilling ? "2px solid #d97706" : "2px solid #e2e8f0",
+                background: isBilling ? "#fffbeb" : "#fafafa",
+                color: isBilling ? "#d97706" : "#94a3b8",
+                fontSize: 12, fontWeight: 700, cursor: "pointer",
+              }}>💰 費用請求回</button>
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#0891b2", marginBottom: 6 }}>印刷状況</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => setPrinted(false)} style={{
+                flex: 1, padding: "7px 0", borderRadius: 8,
+                border: !printed ? "2px solid #dc2626" : "2px solid #e2e8f0",
+                background: !printed ? "#fef2f2" : "#fafafa",
+                color: !printed ? "#dc2626" : "#94a3b8",
+                fontSize: 12, fontWeight: 700, cursor: "pointer",
+              }}>未印刷</button>
+              <button onClick={() => setPrinted(true)} style={{
+                flex: 1, padding: "7px 0", borderRadius: 8,
+                border: printed ? "2px solid #059669" : "2px solid #e2e8f0",
+                background: printed ? "#ecfdf5" : "#fafafa",
+                color: printed ? "#059669" : "#94a3b8",
+                fontSize: 12, fontWeight: 700, cursor: "pointer",
+              }}>🖨 印刷済</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>期限</div>
         <input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} style={{ ...inp, colorScheme: "light" }}
-          onFocus={(e) => e.target.style.borderColor = "#7c3aed"} onBlur={(e) => e.target.style.borderColor = "#e2e8f0"} />
+          onFocus={(e) => e.target.style.borderColor = themeColor} onBlur={(e) => e.target.style.borderColor = "#e2e8f0"} />
       </div>
+
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>
+          Google ChatスペースURL <span style={{ fontSize: 10, fontWeight: 400 }}>（任意）</span>
+        </div>
+        <input value={chatUrl} onChange={(e) => setChatUrl(e.target.value)}
+          placeholder="https://chat.google.com/room/..." style={inp}
+          onFocus={(e) => e.target.style.borderColor = themeColor} onBlur={(e) => e.target.style.borderColor = "#e2e8f0"} />
+      </div>
+
       <div style={{ marginBottom: 18 }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", marginBottom: 6 }}>メモ</div>
         <textarea value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="補足事項、進め方など" rows={3}
           style={{ ...inp, resize: "vertical", lineHeight: 1.6 }}
-          onFocus={(e) => e.target.style.borderColor = "#7c3aed"} onBlur={(e) => e.target.style.borderColor = "#e2e8f0"} />
+          onFocus={(e) => e.target.style.borderColor = themeColor} onBlur={(e) => e.target.style.borderColor = "#e2e8f0"} />
       </div>
+
       <div style={{ display: "flex", gap: 10 }}>
         <button onClick={onCancel} style={{ flex: 1, padding: "12px 0", borderRadius: 12, border: "1.5px solid #e2e8f0", background: "#fff", color: "#64748b", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>キャンセル</button>
         <button disabled={!canSave} onClick={() => {
           if (!canSave) return;
-          onSave({ id: initialData?.id || generateId(), title: title.trim(), deadline: deadline || "", memo: memo.trim(), done: initialData?.done || false, createdAt: initialData?.createdAt || new Date().toISOString(), doneAt: initialData?.doneAt || null });
-        }} style={{ flex: 2, padding: "12px 0", borderRadius: 12, border: "none", background: canSave ? "#7c3aed" : "#cbd5e1", color: "#fff", fontSize: 14, fontWeight: 700, cursor: canSave ? "pointer" : "default" }}>
+          onSave({
+            id: initialData?.id || generateId(),
+            type, title: title.trim(), deadline: deadline || "", memo: memo.trim(),
+            chatUrl: chatUrl.trim(),
+            isBilling: type === "mail" ? isBilling : false,
+            printed: type === "mail" ? printed : false,
+            destination: type === "mail" ? destination : "",
+            done: initialData?.done || false,
+            createdAt: initialData?.createdAt || new Date().toISOString(),
+            doneAt: initialData?.doneAt || null,
+          });
+        }} style={{ flex: 2, padding: "12px 0", borderRadius: 12, border: "none", background: canSave ? themeColor : "#cbd5e1", color: "#fff", fontSize: 14, fontWeight: 700, cursor: canSave ? "pointer" : "default" }}>
           {initialData ? "更新する" : "追加する"}
         </button>
       </div>
@@ -1069,67 +1221,254 @@ function TodayTodoPreview({ todos, onToggle, onGoToTodos }) {
   );
 }
 
+// ─── DestsManager ───
+function DestsManager({ dests, onSave, onClose }) {
+  const [list, setList] = useState([...dests]);
+  const [input, setInput] = useState("");
+
+  const add = () => {
+    const v = input.trim();
+    if (v && !list.includes(v)) {
+      setList([...list, v]);
+      setInput("");
+    }
+  };
+  const remove = (i) => setList(list.filter((_, idx) => idx !== i));
+  const move = (i, dir) => {
+    const ni = i + dir;
+    if (ni < 0 || ni >= list.length) return;
+    const newList = [...list];
+    [newList[i], newList[ni]] = [newList[ni], newList[i]];
+    setList(newList);
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 250, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={onClose}>
+      <div style={{ background: "#fff", borderRadius: "20px 20px 0 0", width: "100%", maxWidth: 520, maxHeight: "80vh", overflowY: "auto", padding: "24px 20px 40px" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#1e293b" }}>📍 郵送先の管理</div>
+            <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>郵送先の選択肢を追加・編集できます</div>
+          </div>
+          <button onClick={onClose} style={{ background: "#f1f5f9", border: "none", borderRadius: 8, width: 32, height: 32, fontSize: 16, cursor: "pointer", color: "#64748b" }}>×</button>
+        </div>
+
+        {/* Add */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          <input value={input} onChange={e => setInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && add()}
+            placeholder="例：東京地裁、〇〇法律事務所、ITJ など"
+            style={{ flex: 1, padding: "10px 14px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box", fontFamily: "inherit" }}
+            onFocus={e => e.target.style.borderColor = "#0891b2"} onBlur={e => e.target.style.borderColor = "#e2e8f0"} />
+          <button onClick={add} disabled={!input.trim()} style={{
+            padding: "10px 18px", borderRadius: 10, border: "none",
+            background: input.trim() ? "#0891b2" : "#cbd5e1",
+            color: "#fff", fontSize: 13, fontWeight: 700, cursor: input.trim() ? "pointer" : "default",
+          }}>＋ 追加</button>
+        </div>
+
+        {/* List */}
+        {list.length === 0 && (
+          <div style={{ textAlign: "center", padding: 30, color: "#94a3b8", fontSize: 13 }}>
+            まだ郵送先が登録されていません
+          </div>
+        )}
+        {list.map((d, i) => (
+          <div key={i} style={{
+            display: "flex", alignItems: "center", gap: 8, padding: "10px 12px",
+            background: "#f8fafc", borderRadius: 10, marginBottom: 6,
+          }}>
+            <span style={{ fontSize: 13, color: "#1e293b", fontWeight: 500, flex: 1 }}>{d}</span>
+            <button onClick={() => move(i, -1)} disabled={i === 0} style={{
+              background: "none", border: "none", fontSize: 14, cursor: i === 0 ? "default" : "pointer",
+              color: i === 0 ? "#cbd5e1" : "#64748b", padding: 4,
+            }}>↑</button>
+            <button onClick={() => move(i, 1)} disabled={i === list.length - 1} style={{
+              background: "none", border: "none", fontSize: 14, cursor: i === list.length - 1 ? "default" : "pointer",
+              color: i === list.length - 1 ? "#cbd5e1" : "#64748b", padding: 4,
+            }}>↓</button>
+            <button onClick={() => remove(i)} style={{
+              background: "none", border: "none", fontSize: 14, cursor: "pointer", color: "#dc2626", padding: 4,
+            }}>×</button>
+          </div>
+        ))}
+
+        {/* Save */}
+        <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+          <button onClick={onClose} style={{ flex: 1, padding: "12px 0", borderRadius: 12, border: "1.5px solid #e2e8f0", background: "#fff", color: "#64748b", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>キャンセル</button>
+          <button onClick={() => { onSave(list); onClose(); }} style={{
+            flex: 2, padding: "12px 0", borderRadius: 12, border: "none",
+            background: "#0891b2", color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer",
+          }}>保存する</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── TodoView ───
-function TodoView({ todos, onSave, onDelete, onToggle }) {
+function TodoView({ todos, dests, onSave, onDelete, onToggle, onTogglePrint, onSaveDests }) {
   const [showForm, setShowForm] = useState(false);
   const [editingTodo, setEditingTodo] = useState(null);
+  const [formDefaultType, setFormDefaultType] = useState("normal");
+  const [typeTab, setTypeTab] = useState("normal");
   const [filter, setFilter] = useState("active");
+  const [sortBy, setSortBy] = useState("deadline"); // deadline | destination
+  const [showDestsMgr, setShowDestsMgr] = useState(false);
   const today = getToday();
-  const filtered = todos.filter(t => filter === "active" ? !t.done : filter === "done" ? t.done : true)
+
+  const typed = todos.filter(t => (t.type || "normal") === typeTab);
+  const filtered = typed.filter(t => filter === "active" ? !t.done : filter === "done" ? t.done : true)
     .sort((a, b) => {
       if (a.done !== b.done) return a.done ? 1 : -1;
+      if (typeTab === "mail" && sortBy === "destination") {
+        const ad = a.destination || "zzz_未設定";
+        const bd = b.destination || "zzz_未設定";
+        if (ad !== bd) return ad.localeCompare(bd);
+      }
       if (!a.deadline && !b.deadline) return 0;
       if (!a.deadline) return 1;
       if (!b.deadline) return -1;
       return a.deadline.localeCompare(b.deadline);
     });
-  const overdueCount = todos.filter(t => !t.done && t.deadline && t.deadline < today).length;
-  const todayCount = todos.filter(t => !t.done && t.deadline === today).length;
-  const activeCount = todos.filter(t => !t.done).length;
+
+  const overdueCount = typed.filter(t => !t.done && t.deadline && t.deadline < today).length;
+  const todayCount = typed.filter(t => !t.done && t.deadline === today).length;
+  const activeCount = typed.filter(t => !t.done).length;
+  const unprintedCount = typeTab === "mail" ? typed.filter(t => !t.done && !t.printed).length : 0;
+
   const handleSave = (todo) => { onSave(todo); setShowForm(false); setEditingTodo(null); };
   const handleEdit = (todo) => { setEditingTodo(todo); setShowForm(true); };
+  const themeColor = typeTab === "mail" ? "#0891b2" : "#7c3aed";
+  const themeBg = typeTab === "mail" ? "linear-gradient(135deg, #155e75, #0891b2)" : "linear-gradient(135deg, #581c87, #7c3aed)";
+
+  // 郵送先でグループ化する場合のための補助
+  const showDestGroups = typeTab === "mail" && sortBy === "destination";
+  let lastDest = null;
+
   return (
     <div style={{ padding: "0 0 100px", maxWidth: 520, margin: "0 auto" }}>
-      <div style={{ background: "linear-gradient(135deg, #581c87, #7c3aed)", padding: "24px 18px 20px", borderRadius: "0 0 24px 24px", color: "#fff", marginBottom: 18 }}>
+      <div style={{ background: themeBg, padding: "24px 18px 20px", borderRadius: "0 0 24px 24px", color: "#fff", marginBottom: 18 }}>
         <div style={{ fontSize: 11, opacity: 0.7, fontWeight: 500, letterSpacing: 1 }}>TO-DO LIST</div>
-        <div style={{ fontSize: 20, fontWeight: 800, marginTop: 2, marginBottom: 14 }}>タスク管理</div>
+        <div style={{ fontSize: 20, fontWeight: 800, marginTop: 2, marginBottom: 14 }}>
+          {typeTab === "mail" ? "📮 郵送タスク" : "タスク管理"}
+        </div>
         <div style={{ display: "flex", gap: 16, justifyContent: "center" }}>
           <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800 }}>{activeCount}</div><div style={{ fontSize: 10, opacity: 0.7 }}>未完了</div></div>
           <div style={{ width: 1, background: "rgba(255,255,255,0.2)" }} />
           <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800, color: todayCount > 0 ? "#fde68a" : "#fff" }}>{todayCount}</div><div style={{ fontSize: 10, opacity: 0.7 }}>今日まで</div></div>
           <div style={{ width: 1, background: "rgba(255,255,255,0.2)" }} />
           <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800, color: overdueCount > 0 ? "#fecaca" : "#fff" }}>{overdueCount}</div><div style={{ fontSize: 10, opacity: 0.7 }}>期限超過</div></div>
+          {typeTab === "mail" && (
+            <>
+              <div style={{ width: 1, background: "rgba(255,255,255,0.2)" }} />
+              <div style={{ textAlign: "center" }}><div style={{ fontSize: 22, fontWeight: 800, color: unprintedCount > 0 ? "#fecaca" : "#fff" }}>{unprintedCount}</div><div style={{ fontSize: 10, opacity: 0.7 }}>未印刷</div></div>
+            </>
+          )}
         </div>
       </div>
+
       <div style={{ padding: "0 16px" }}>
+        {/* 種類タブ */}
+        <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+          <button onClick={() => { setTypeTab("normal"); setShowForm(false); setEditingTodo(null); }} style={{
+            flex: 1, padding: "10px 0", borderRadius: 10,
+            border: typeTab === "normal" ? "2px solid #7c3aed" : "2px solid #e2e8f0",
+            background: typeTab === "normal" ? "#faf5ff" : "#fff",
+            color: typeTab === "normal" ? "#7c3aed" : "#64748b",
+            fontSize: 13, fontWeight: 700, cursor: "pointer",
+          }}>通常タスク</button>
+          <button onClick={() => { setTypeTab("mail"); setShowForm(false); setEditingTodo(null); }} style={{
+            flex: 1, padding: "10px 0", borderRadius: 10,
+            border: typeTab === "mail" ? "2px solid #0891b2" : "2px solid #e2e8f0",
+            background: typeTab === "mail" ? "#ecfeff" : "#fff",
+            color: typeTab === "mail" ? "#0891b2" : "#64748b",
+            fontSize: 13, fontWeight: 700, cursor: "pointer",
+          }}>📮 郵送タスク</button>
+        </div>
+
         {showForm ? (
-          <TodoForm onSave={handleSave} onCancel={() => { setShowForm(false); setEditingTodo(null); }} initialData={editingTodo} />
+          <TodoForm onSave={handleSave} onCancel={() => { setShowForm(false); setEditingTodo(null); }} initialData={editingTodo} defaultType={formDefaultType} dests={dests} onManageDests={() => setShowDestsMgr(true)} />
         ) : (
-          <button onClick={() => { setEditingTodo(null); setShowForm(true); }} style={{
-            width: "100%", padding: "14px", borderRadius: 14, border: "2px dashed #d8b4fe",
-            background: "#fff", color: "#7c3aed", fontSize: 14, fontWeight: 700, cursor: "pointer", marginBottom: 16,
-          }}>＋ ToDoを追加</button>
+          <button onClick={() => { setEditingTodo(null); setFormDefaultType(typeTab); setShowForm(true); }} style={{
+            width: "100%", padding: "14px", borderRadius: 14,
+            border: typeTab === "mail" ? "2px dashed #67e8f9" : "2px dashed #d8b4fe",
+            background: "#fff", color: themeColor, fontSize: 14, fontWeight: 700, cursor: "pointer", marginBottom: 16,
+          }}>＋ {typeTab === "mail" ? "郵送" : ""}ToDoを追加</button>
         )}
+
+        {/* フィルタ＋並び替え（郵送タブのみ） */}
         <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
           {[{id:"active",label:"未完了"},{id:"done",label:"完了"},{id:"all",label:"すべて"}].map(f => (
             <button key={f.id} onClick={() => setFilter(f.id)} style={{
               flex: 1, padding: "8px 0", borderRadius: 10,
-              border: filter === f.id ? "2px solid #7c3aed" : "2px solid #e2e8f0",
-              background: filter === f.id ? "#faf5ff" : "#fff",
-              color: filter === f.id ? "#7c3aed" : "#64748b", fontSize: 12, fontWeight: 700, cursor: "pointer",
+              border: filter === f.id ? `2px solid ${themeColor}` : "2px solid #e2e8f0",
+              background: filter === f.id ? (typeTab === "mail" ? "#ecfeff" : "#faf5ff") : "#fff",
+              color: filter === f.id ? themeColor : "#64748b", fontSize: 12, fontWeight: 700, cursor: "pointer",
             }}>{f.label}</button>
           ))}
         </div>
+
+        {typeTab === "mail" && (
+          <div style={{ display: "flex", gap: 6, marginBottom: 14, alignItems: "center" }}>
+            <span style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>並び順：</span>
+            <button onClick={() => setSortBy("deadline")} style={{
+              padding: "5px 12px", borderRadius: 16,
+              border: sortBy === "deadline" ? "1.5px solid #0891b2" : "1.5px solid #e2e8f0",
+              background: sortBy === "deadline" ? "#ecfeff" : "#fff",
+              color: sortBy === "deadline" ? "#0891b2" : "#94a3b8",
+              fontSize: 11, fontWeight: 700, cursor: "pointer",
+            }}>📅 期限順</button>
+            <button onClick={() => setSortBy("destination")} style={{
+              padding: "5px 12px", borderRadius: 16,
+              border: sortBy === "destination" ? "1.5px solid #0891b2" : "1.5px solid #e2e8f0",
+              background: sortBy === "destination" ? "#ecfeff" : "#fff",
+              color: sortBy === "destination" ? "#0891b2" : "#94a3b8",
+              fontSize: 11, fontWeight: 700, cursor: "pointer",
+            }}>📍 郵送先順</button>
+            <button onClick={() => setShowDestsMgr(true)} style={{
+              marginLeft: "auto",
+              padding: "5px 12px", borderRadius: 16, border: "1.5px solid #0891b2",
+              background: "#fff", color: "#0891b2", fontSize: 11, fontWeight: 700, cursor: "pointer",
+            }}>📍 郵送先管理</button>
+          </div>
+        )}
+
         {filtered.length === 0 && (
           <div style={{ textAlign: "center", padding: "40px 20px", color: "#94a3b8" }}>
-            <div style={{ fontSize: 36, marginBottom: 10 }}>✨</div>
+            <div style={{ fontSize: 36, marginBottom: 10 }}>{typeTab === "mail" ? "📭" : "✨"}</div>
             <div style={{ fontSize: 14, fontWeight: 500 }}>{filter === "active" ? "未完了のタスクはありません" : filter === "done" ? "完了したタスクはありません" : "タスクがありません"}</div>
           </div>
         )}
-        {filtered.map(todo => (
-          <TodoItem key={todo.id} todo={todo} onToggle={onToggle} onDelete={onDelete} onEdit={handleEdit} />
-        ))}
+
+        {filtered.map(todo => {
+          // 郵送先グループヘッダーを表示
+          let groupHeader = null;
+          if (showDestGroups) {
+            const curDest = todo.destination || "（未設定）";
+            if (curDest !== lastDest) {
+              lastDest = curDest;
+              groupHeader = (
+                <div style={{
+                  fontSize: 12, fontWeight: 700, color: "#0891b2",
+                  marginTop: 12, marginBottom: 6, paddingBottom: 4,
+                  borderBottom: "1px solid #cffafe",
+                }}>📍 {curDest}</div>
+              );
+            }
+          }
+          return (
+            <React.Fragment key={todo.id}>
+              {groupHeader}
+              <TodoItem todo={todo} onToggle={onToggle} onDelete={onDelete} onEdit={handleEdit} onTogglePrint={onTogglePrint} />
+            </React.Fragment>
+          );
+        })}
       </div>
+
+      {showDestsMgr && (
+        <DestsManager dests={dests} onSave={onSaveDests} onClose={() => setShowDestsMgr(false)} />
+      )}
     </div>
   );
 }
@@ -1251,6 +1590,7 @@ function WorkLog() {
   const [achievements, setAchievements] = useState([]);
   const [summaries, setSummaries] = useState([]);
   const [todos, setTodos] = useState([]);
+  const [dests, setDests] = useState([]);
   const [selectedDate, setSelectedDate] = useState(getToday());
   const [showForm, setShowForm] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
@@ -1263,11 +1603,12 @@ function WorkLog() {
 
   useEffect(() => {
     setSyncStatus("syncing");
-    Promise.all([cloudFetch(), cloudFetchAch(), cloudFetchSummaries(), cloudFetchTodos()]).then(([cloud, cloudAch, cloudSum, cloudTodos]) => {
+    Promise.all([cloudFetch(), cloudFetchAch(), cloudFetchSummaries(), cloudFetchTodos(), cloudFetchDests()]).then(([cloud, cloudAch, cloudSum, cloudTodos, cloudDests]) => {
       if (cloud) { setEntries(cloud); saveLocal(cloud); } else { setEntries(loadLocal()); }
       if (cloudAch) { setAchievements(cloudAch); saveLocalAch(cloudAch); } else { setAchievements(loadLocalAch()); }
       if (cloudSum) { setSummaries(cloudSum); saveLocalSummaries(cloudSum); } else { setSummaries(loadLocalSummaries()); }
       if (cloudTodos) { setTodos(cloudTodos); saveLocalTodos(cloudTodos); } else { setTodos(loadLocalTodos()); }
+      if (cloudDests) { setDests(cloudDests); saveLocalDests(cloudDests); } else { setDests(loadLocalDests()); }
       setSyncStatus(cloud ? "synced" : "offline");
       setLoaded(true);
     });
@@ -1277,11 +1618,12 @@ function WorkLog() {
     function onVisible() {
       if (document.visibilityState === "visible") {
         setSyncStatus("syncing");
-        Promise.all([cloudFetch(), cloudFetchAch(), cloudFetchSummaries(), cloudFetchTodos()]).then(([cloud, cloudAch, cloudSum, cloudTodos]) => {
+        Promise.all([cloudFetch(), cloudFetchAch(), cloudFetchSummaries(), cloudFetchTodos(), cloudFetchDests()]).then(([cloud, cloudAch, cloudSum, cloudTodos, cloudDests]) => {
           if (cloud) { setEntries(cloud); saveLocal(cloud); }
           if (cloudAch) { setAchievements(cloudAch); saveLocalAch(cloudAch); }
           if (cloudSum) { setSummaries(cloudSum); saveLocalSummaries(cloudSum); }
           if (cloudTodos) { setTodos(cloudTodos); saveLocalTodos(cloudTodos); }
+          if (cloudDests) { setDests(cloudDests); saveLocalDests(cloudDests); }
           setSyncStatus(cloud ? "synced" : "offline");
         });
       }
@@ -1319,6 +1661,12 @@ function WorkLog() {
   };
   const handleDeleteTodo = (id) => persistTodos(todos.filter(t => t.id !== id));
   const handleToggleTodo = (id) => persistTodos(todos.map(t => t.id === id ? { ...t, done: !t.done, doneAt: !t.done ? new Date().toISOString() : null } : t));
+  const handleTogglePrint = (id) => persistTodos(todos.map(t => t.id === id ? { ...t, printed: !t.printed } : t));
+
+  const persistDests = useCallback((newDests) => {
+    setDests(newDests); saveLocalDests(newDests); setSyncStatus("syncing");
+    cloudSaveDests(newDests).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
+  }, []);
 
   const todayTasks = entries[selectedDate] || [];
 
@@ -1395,7 +1743,7 @@ function WorkLog() {
 
   if (view === "todos") return (
     <div style={{ minHeight: "100vh", background: "#f5f7fb", maxWidth: 520, margin: "0 auto" }}>
-      <TodoView todos={todos} onSave={handleSaveTodo} onDelete={handleDeleteTodo} onToggle={handleToggleTodo} />
+      <TodoView todos={todos} dests={dests} onSave={handleSaveTodo} onDelete={handleDeleteTodo} onToggle={handleToggleTodo} onTogglePrint={handleTogglePrint} onSaveDests={persistDests} />
       <NavBar />
     </div>
   );
