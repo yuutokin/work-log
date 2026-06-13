@@ -140,6 +140,15 @@ async function cloudSaveDests(dests) {
   try { const payload = encodeURIComponent(JSON.stringify({ dests })); await jsonp(GAS_URL + "?action=saveDests&payload=" + payload); } catch {}
 }
 
+async function cloudGenerateReport(monthKey, data) {
+  try {
+    const payload = encodeURIComponent(JSON.stringify(data));
+    const d = await jsonp(GAS_URL + "?action=generateReport&month=" + encodeURIComponent(monthKey) + "&data=" + payload);
+    if (d.success) return d.url;
+  } catch {}
+  return null;
+}
+
 const GCHAT_WEBHOOK = "https://chat.googleapis.com/v1/spaces/AAQAKwqo4bc/messages?key=AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI&token=fSrFTRpB_IFv2VfB5d2_2cz4cE5ouwjTfUGULJAxIxY";
 const SUMMARY_LOCAL_KEY = "worklog-summaries";
 function loadLocalSummaries() { try { return JSON.parse(localStorage.getItem(SUMMARY_LOCAL_KEY)) || []; } catch { return []; } }
@@ -414,10 +423,12 @@ function TaskForm({ onSave, onCancel, initialData }) {
 }
 
 // ─── MonthlyView ───
-function MonthlyView({ entries, achievements, onBack }) {
+function MonthlyView({ entries, achievements, onBack, onShowPresentation }) {
   const categoryMap = {}; CATEGORIES.forEach((c) => (categoryMap[c.id] = c));
   const achTypeMap = {}; 
   const [copiedMonth, setCopiedMonth] = useState("");
+  const [generatingMonth, setGeneratingMonth] = useState("");
+  const [generatedUrl, setGeneratedUrl] = useState({});
   const months = {};
   Object.keys(entries).sort().reverse().forEach((date) => { const mk = getMonthKey(date); if (!months[mk]) months[mk] = {}; months[mk][date] = entries[date]; });
 
@@ -439,6 +450,20 @@ function MonthlyView({ entries, achievements, onBack }) {
 
   function getMonthAch(mk) {
     return (achievements || []).filter(a => getMonthKey(a.date) === mk);
+  }
+
+  async function generateSheet(mk) {
+    setGeneratingMonth(mk);
+    const md = months[mk] || {};
+    const monthAch = getMonthAch(mk);
+    const url = await cloudGenerateReport(mk, { tasks: md, achievements: monthAch });
+    setGeneratingMonth("");
+    if (url) {
+      setGeneratedUrl({ ...generatedUrl, [mk]: url });
+      window.open(url, "_blank");
+    } else {
+      alert("シートの生成に失敗しました");
+    }
   }
 
   function exportCSV(mk) {
@@ -558,14 +583,33 @@ function MonthlyView({ entries, achievements, onBack }) {
             {isExpanded && (
               <div style={{ padding: "0 14px 14px" }}>
                 {/* Export buttons */}
-                <div style={{ display: "flex", gap: 8, marginTop: 12, marginBottom: 4 }}>
-                  <button onClick={(e) => { e.stopPropagation(); exportCSV(mk); }} style={{ flex: 1, padding: "10px 0", borderRadius: 10, border: "1.5px solid #2563eb", background: "#eff6ff", color: "#2563eb", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📥 CSV</button>
+                <div style={{ display: "flex", gap: 8, marginTop: 12, marginBottom: 8 }}>
+                  <button onClick={(e) => { e.stopPropagation(); exportCSV(mk); }} style={{ flex: 1, padding: "10px 0", borderRadius: 10, border: "1.5px solid #2563eb", background: "#eff6ff", color: "#2563eb", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📥 CSV</button>
                   <button onClick={(e) => { e.stopPropagation(); copyAsText(mk); }} style={{
                     flex: 1, padding: "10px 0", borderRadius: 10,
                     border: copiedMonth === mk ? "1.5px solid #059669" : "1.5px solid #64748b",
                     background: copiedMonth === mk ? "#ecfdf5" : "#f8fafc",
-                    color: copiedMonth === mk ? "#059669" : "#475569", fontSize: 13, fontWeight: 700, cursor: "pointer",
-                  }}>{copiedMonth === mk ? "✓ コピー済み" : "📋 テキストコピー"}</button>
+                    color: copiedMonth === mk ? "#059669" : "#475569", fontSize: 12, fontWeight: 700, cursor: "pointer",
+                  }}>{copiedMonth === mk ? "✓" : "📋 テキスト"}</button>
+                </div>
+
+                {/* プレゼン用ボタン */}
+                <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+                  <button onClick={(e) => { e.stopPropagation();
+                    if (generatedUrl[mk]) window.open(generatedUrl[mk], "_blank");
+                    else generateSheet(mk);
+                  }} disabled={generatingMonth === mk} style={{
+                    flex: 1, padding: "11px 0", borderRadius: 10, border: "none",
+                    background: generatingMonth === mk ? "#94a3b8" : "linear-gradient(135deg, #1e40af, #2563eb)",
+                    color: "#fff", fontSize: 12, fontWeight: 700, cursor: generatingMonth === mk ? "default" : "pointer",
+                  }}>
+                    {generatingMonth === mk ? "⏳ 生成中…" : generatedUrl[mk] ? "✓ シートを開く" : "📊 プレゼン用シート生成"}
+                  </button>
+                  <button onClick={(e) => { e.stopPropagation(); onShowPresentation(mk, months[mk] || {}, getMonthAch(mk)); }} style={{
+                    flex: 1, padding: "11px 0", borderRadius: 10, border: "none",
+                    background: "linear-gradient(135deg, #7c3aed, #a855f7)", color: "#fff",
+                    fontSize: 12, fontWeight: 700, cursor: "pointer",
+                  }}>🎤 プレゼン表示</button>
                 </div>
 
                 {/* Graph */}
@@ -611,6 +655,183 @@ function MonthlyView({ entries, achievements, onBack }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ─── PresentationView（HTML/PDFプレゼン版） ───
+function PresentationView({ monthKey, tasks, achievements, onClose }) {
+  const categoryMap = {}; CATEGORIES.forEach((c) => (categoryMap[c.id] = c));
+  const ATYPES = [
+    { id: "blog", label: "ブログ記事", icon: "✍️", color: "#d97706" },
+    { id: "document", label: "書面・起案", icon: "⚖️", color: "#dc2626" },
+    { id: "template", label: "テンプレート", icon: "📋", color: "#2563eb" },
+    { id: "manual", label: "マニュアル", icon: "📖", color: "#0891b2" },
+    { id: "system", label: "システム・ツール", icon: "🖥️", color: "#059669" },
+    { id: "other", label: "その他", icon: "📎", color: "#78716c" },
+  ];
+  const atypeMap = {}; ATYPES.forEach(t => atypeMap[t.id] = t);
+
+  const [y, m] = monthKey.split("-");
+  const dates = Object.keys(tasks).sort();
+  let totalMins = 0, totalCount = 0;
+  const catStats = {};
+  dates.forEach(d => (tasks[d] || []).forEach(t => {
+    const mins = t.minutes || (t.hours ? Math.round(t.hours * 60) : 0);
+    totalMins += mins; totalCount++;
+    if (!catStats[t.category]) catStats[t.category] = { mins: 0, count: 0 };
+    catStats[t.category].mins += mins;
+    catStats[t.category].count++;
+  }));
+  const sortedCats = CATEGORIES.filter(c => catStats[c.id]).sort((a, b) => catStats[b.id].mins - catStats[a.id].mins);
+  const maxMins = sortedCats.length > 0 ? Math.max(...sortedCats.map(c => catStats[c.id].mins)) : 1;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "#fff", zIndex: 300, overflowY: "auto" }}>
+      {/* 固定ヘッダー（印刷時非表示） */}
+      <div className="no-print" style={{
+        position: "sticky", top: 0, zIndex: 10, background: "#1e293b", color: "#fff",
+        padding: "12px 20px", display: "flex", justifyContent: "space-between", alignItems: "center",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
+      }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>📊 プレゼン表示</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => window.print()} style={{
+            padding: "7px 14px", borderRadius: 8, border: "none",
+            background: "#2563eb", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer",
+          }}>🖨 PDF保存・印刷</button>
+          <button onClick={onClose} style={{
+            padding: "7px 14px", borderRadius: 8, border: "1.5px solid #475569",
+            background: "transparent", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer",
+          }}>閉じる</button>
+        </div>
+      </div>
+
+      <style>{`
+        @media print {
+          .no-print { display: none !important; }
+          @page { size: A4; margin: 12mm; }
+          body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        }
+        .presentation-body { font-family: 'Noto Sans JP', sans-serif; color: #1e293b; }
+        .presentation-body .page-break { page-break-before: always; }
+      `}</style>
+
+      <div className="presentation-body" style={{ maxWidth: 800, margin: "0 auto", padding: "32px 28px 60px" }}>
+        {/* タイトル */}
+        <div style={{
+          background: "linear-gradient(135deg, #1e3a5f, #2563eb)",
+          color: "#fff", padding: "40px 32px", borderRadius: 20, marginBottom: 32,
+          textAlign: "center",
+        }}>
+          <div style={{ fontSize: 12, opacity: 0.85, letterSpacing: 2, marginBottom: 8 }}>MONTHLY REPORT</div>
+          <div style={{ fontSize: 36, fontWeight: 800, letterSpacing: 1 }}>
+            {parseInt(y)}年 {parseInt(m)}月　業務報告
+          </div>
+        </div>
+
+        {/* KPIカード */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12, marginBottom: 32 }}>
+          {[
+            { label: "稼働日数", value: dates.length, unit: "日", color: "#2563eb" },
+            { label: "総タスク数", value: totalCount, unit: "件", color: "#7c3aed" },
+            { label: "総作業時間", value: formatMinutes(totalMins) || "0m", unit: "", color: "#059669" },
+            { label: "成果物", value: achievements.length, unit: "件", color: "#d97706" },
+          ].map((k, i) => (
+            <div key={i} style={{
+              background: "#fff", border: `2px solid ${k.color}20`, borderRadius: 14,
+              padding: "18px 12px", textAlign: "center",
+            }}>
+              <div style={{ fontSize: 11, color: "#64748b", fontWeight: 600, marginBottom: 6 }}>{k.label}</div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: k.color, lineHeight: 1 }}>
+                {k.value}<span style={{ fontSize: 12, marginLeft: 2 }}>{k.unit}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* カテゴリ別集計＋グラフ */}
+        <div style={{ background: "#f8fafc", borderRadius: 16, padding: 24, marginBottom: 32 }}>
+          <div style={{ fontSize: 16, fontWeight: 800, color: "#1e293b", marginBottom: 16, paddingBottom: 8, borderBottom: "2px solid #e2e8f0" }}>
+            📊 カテゴリ別作業時間
+          </div>
+          {sortedCats.map(c => {
+            const s = catStats[c.id];
+            const pct = (s.mins / maxMins) * 100;
+            const ratio = totalMins > 0 ? (s.mins / totalMins * 100).toFixed(1) : 0;
+            return (
+              <div key={c.id} style={{ marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: c.color }}>{c.icon} {c.label}</span>
+                  <span style={{ fontSize: 12, color: "#64748b" }}>{formatMinutes(s.mins)} ({s.count}件) ・ {ratio}%</span>
+                </div>
+                <div style={{ background: "#e2e8f0", borderRadius: 6, height: 14, overflow: "hidden" }}>
+                  <div style={{ width: pct + "%", background: c.color, height: "100%", borderRadius: 6 }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* 成果物 */}
+        {achievements.length > 0 && (
+          <div style={{ marginBottom: 32 }} className="page-break">
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#059669", marginBottom: 16, paddingBottom: 8, borderBottom: "2px solid #d1fae5" }}>
+              🏆 今月の成果物（{achievements.length}件）
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              {achievements.sort((a,b) => a.date.localeCompare(b.date)).map(a => {
+                const t = atypeMap[a.type] || { label: a.type, icon: "📎", color: "#78716c" };
+                return (
+                  <div key={a.id} style={{ background: "#f0fdf4", borderRadius: 12, padding: 14, borderLeft: `4px solid ${t.color}` }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                      <span style={{ fontSize: 10, background: t.color + "20", color: t.color, padding: "2px 8px", borderRadius: 12, fontWeight: 700 }}>{t.icon} {t.label}</span>
+                      <span style={{ fontSize: 10, color: "#94a3b8" }}>{a.date}</span>
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#1e293b" }}>{a.title}</div>
+                    {a.memo && <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>{a.memo}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* 日別タイムライン */}
+        <div className="page-break">
+          <div style={{ fontSize: 16, fontWeight: 800, color: "#2563eb", marginBottom: 16, paddingBottom: 8, borderBottom: "2px solid #dbeafe" }}>
+            📋 日別タスク一覧
+          </div>
+          {dates.filter(d => (tasks[d] || []).length > 0).map(date => {
+            const dayTasks = tasks[date] || [];
+            const dayMins = dayTasks.reduce((s, t) => s + (t.minutes || (t.hours ? Math.round(t.hours * 60) : 0)), 0);
+            return (
+              <div key={date} style={{ marginBottom: 18 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#1e293b", marginBottom: 8, paddingBottom: 4, borderBottom: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between" }}>
+                  <span>{formatDate(date)}</span>
+                  <span style={{ fontSize: 12, color: "#64748b", fontWeight: 500 }}>{dayTasks.length}件 ・ {formatMinutes(dayMins)}</span>
+                </div>
+                {dayTasks.map(t => {
+                  const c = categoryMap[t.category] || { label: t.category, color: "#78716c", icon: "" };
+                  const mins = t.minutes || (t.hours ? Math.round(t.hours * 60) : 0);
+                  return (
+                    <div key={t.id} style={{ display: "flex", gap: 10, padding: "6px 0", borderBottom: "1px dashed #f1f5f9" }}>
+                      <span style={{ fontSize: 10, background: c.color + "20", color: c.color, padding: "2px 8px", borderRadius: 10, fontWeight: 600, alignSelf: "flex-start", whiteSpace: "nowrap", marginTop: 2 }}>
+                        {c.icon} {c.label}
+                      </span>
+                      <div style={{ flex: 1 }}>
+                        {t.caseName && <span style={{ fontSize: 12, fontWeight: 700, color: "#1e293b", marginRight: 8 }}>【{t.caseName}】</span>}
+                        <span style={{ fontSize: 12, color: "#475569" }}>{t.detail || t.title}</span>
+                      </div>
+                      {mins > 0 && <span style={{ fontSize: 11, color: "#94a3b8", whiteSpace: "nowrap" }}>{formatMinutes(mins)}</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1661,6 +1882,7 @@ function WorkLog() {
   const [showForm, setShowForm] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [showMorning, setShowMorning] = useState(false);
+  const [presentation, setPresentation] = useState(null); // {monthKey, tasks, achievements}
   const [editingTask, setEditingTask] = useState(null);
   const [view, setView] = useState("daily");
   const [syncStatus, setSyncStatus] = useState("syncing");
@@ -1802,8 +2024,23 @@ function WorkLog() {
 
   if (view === "monthly") return (
     <div style={{ minHeight: "100vh", background: "#f5f7fb", maxWidth: 520, margin: "0 auto" }}>
-      <div style={{ padding: "16px 16px 100px" }}><MonthlyView entries={entries} achievements={achievements} onBack={() => setView("daily")} /></div>
+      <div style={{ padding: "16px 16px 100px" }}>
+        <MonthlyView
+          entries={entries}
+          achievements={achievements}
+          onBack={() => setView("daily")}
+          onShowPresentation={(mk, t, a) => setPresentation({ monthKey: mk, tasks: t, achievements: a })}
+        />
+      </div>
       <NavBar />
+      {presentation && (
+        <PresentationView
+          monthKey={presentation.monthKey}
+          tasks={presentation.tasks}
+          achievements={presentation.achievements}
+          onClose={() => setPresentation(null)}
+        />
+      )}
     </div>
   );
 
