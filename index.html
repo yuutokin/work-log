@@ -212,8 +212,6 @@ function TaskItem({ task, onDelete, onEdit, categoryMap, readOnly }) {
   );
 }
 
-// ─── TaskForm（ストップウォッチ内蔵） ───
-function TaskForm({ onSave, onCancel, initialData }) {
 // ─── TaskForm（ストップウォッチ内蔵 + 下書き自動保存） ───
 function TaskForm({ onSave, onCancel, initialData }) {
   const DRAFT_KEY = "worklog-taskform-draft";
