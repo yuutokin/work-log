@@ -214,35 +214,106 @@ function TaskItem({ task, onDelete, onEdit, categoryMap, readOnly }) {
 
 // ─── TaskForm（ストップウォッチ内蔵） ───
 function TaskForm({ onSave, onCancel, initialData }) {
-  const [category, setCategory] = useState(initialData?.category || "");
-  const [caseName, setCaseName] = useState(initialData?.caseName || "");
-  const [detail, setDetail] = useState(initialData?.detail || initialData?.title || "");
+// ─── TaskForm（ストップウォッチ内蔵 + 下書き自動保存） ───
+function TaskForm({ onSave, onCancel, initialData }) {
+  // 下書きの読み込み（新規作成時のみ）
+  const DRAFT_KEY = "worklog-taskform-draft";
+  const SW_KEY = "worklog-taskform-sw";
+  const loadDraft = () => {
+    if (initialData) return null; // 編集時は下書きを使わない
+    try { return JSON.parse(localStorage.getItem(DRAFT_KEY)); } catch { return null; }
+  };
+  const loadSwState = () => {
+    if (initialData) return null;
+    try { return JSON.parse(localStorage.getItem(SW_KEY)); } catch { return null; }
+  };
+  const draft = loadDraft();
+  const swState = loadSwState();
+
+  const [category, setCategory] = useState(initialData?.category || draft?.category || "");
+  const [caseName, setCaseName] = useState(initialData?.caseName || draft?.caseName || "");
+  const [detail, setDetail] = useState(initialData?.detail || initialData?.title || draft?.detail || "");
   const [minutes, setMinutes] = useState(() => {
     if (initialData?.minutes) return String(initialData.minutes);
     if (initialData?.hours) return String(Math.round(initialData.hours * 60));
+    if (draft?.minutes) return draft.minutes;
     return "";
   });
 
-  // ── ストップウォッチ state ──
-  const [swRunning, setSwRunning] = useState(false);
-  const [swElapsed, setSwElapsed] = useState(0);
+  // 入力内容を下書きとして自動保存
+  useEffect(() => {
+    if (initialData) return;
+    if (!category && !caseName && !detail && !minutes) {
+      localStorage.removeItem(DRAFT_KEY);
+      return;
+    }
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({ category, caseName, detail, minutes }));
+  }, [category, caseName, detail, minutes, initialData]);
+
+  // ── ストップウォッチ state（復元可能） ──
+  const initialElapsed = (() => {
+    if (!swState) return 0;
+    if (swState.running && swState.startMs) {
+      return Math.floor((Date.now() - swState.startMs) / 1000);
+    }
+    return swState.elapsed || 0;
+  })();
+  const [swRunning, setSwRunning] = useState(swState?.running || false);
+  const [swElapsed, setSwElapsed] = useState(initialElapsed);
   const swIntervalRef = React.useRef(null);
-  const swStartRef = React.useRef(null);
+  const swStartRef = React.useRef(swState?.running && swState.startMs ? swState.startMs : null);
+
+  // ストップウォッチ状態の保存
+  const saveSwState = (running, elapsed, startMs) => {
+    if (initialData) return;
+    if (!running && elapsed === 0) {
+      localStorage.removeItem(SW_KEY);
+      return;
+    }
+    localStorage.setItem(SW_KEY, JSON.stringify({ running, elapsed, startMs }));
+  };
+
+  // 起動中だった場合、interval を再開
+  useEffect(() => {
+    if (swRunning && swStartRef.current) {
+      swIntervalRef.current = setInterval(() => {
+        setSwElapsed(Math.floor((Date.now() - swStartRef.current) / 1000));
+      }, 500);
+    }
+    return () => clearInterval(swIntervalRef.current);
+  }, []);
+
   const swStart = () => {
     swStartRef.current = Date.now() - swElapsed * 1000;
     swIntervalRef.current = setInterval(() => setSwElapsed(Math.floor((Date.now() - swStartRef.current) / 1000)), 500);
     setSwRunning(true);
+    saveSwState(true, swElapsed, swStartRef.current);
   };
-  const swPause = () => { clearInterval(swIntervalRef.current); setSwRunning(false); };
-  const swReset = () => { clearInterval(swIntervalRef.current); setSwRunning(false); setSwElapsed(0); };
+  const swPause = () => {
+    clearInterval(swIntervalRef.current);
+    setSwRunning(false);
+    saveSwState(false, swElapsed, null);
+  };
+  const swReset = () => {
+    clearInterval(swIntervalRef.current);
+    setSwRunning(false);
+    setSwElapsed(0);
+    swStartRef.current = null;
+    localStorage.removeItem(SW_KEY);
+  };
   const swUse = () => {
     const m = Math.ceil(swElapsed / 60);
     setMinutes(String(m));
     swReset();
   };
-  useEffect(() => () => clearInterval(swIntervalRef.current), []);
   const swFmt = (s) => { const m = Math.floor(s / 60), sec = s % 60; return `${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`; };
   const swMins = Math.ceil(swElapsed / 60);
+
+  // 保存・キャンセル時に下書き削除
+  const clearDrafts = () => {
+    localStorage.removeItem(DRAFT_KEY);
+    localStorage.removeItem(SW_KEY);
+  };
 
   const canSave = category && detail.trim();
   const inp = { width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid #e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box" };
@@ -335,9 +406,10 @@ function TaskForm({ onSave, onCancel, initialData }) {
       </div>
 
       <div style={{ display: "flex", gap: 10 }}>
-        <button onClick={onCancel} style={{ flex: 1, padding: "12px 0", borderRadius: 12, border: "1.5px solid #e2e8f0", background: "#fff", color: "#64748b", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>キャンセル</button>
+        <button onClick={() => { clearDrafts(); onCancel(); }} style={{ flex: 1, padding: "12px 0", borderRadius: 12, border: "1.5px solid #e2e8f0", background: "#fff", color: "#64748b", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>キャンセル</button>
         <button disabled={!canSave} onClick={() => {
           if (!canSave) return;
+          clearDrafts();
           onSave({ id: initialData?.id || generateId(), category, caseName: caseName.trim(), title: "", detail: detail.trim(), priority: "medium", minutes: minutes ? parseInt(minutes) : null, hours: minutes ? parseInt(minutes) / 60 : null });
         }} style={{ flex: 2, padding: "12px 0", borderRadius: 12, border: "none", background: canSave ? "#2563eb" : "#cbd5e1", color: "#fff", fontSize: 14, fontWeight: 700, cursor: canSave ? "pointer" : "default" }}>
           {initialData ? "更新する" : "保存する"}
@@ -1712,7 +1784,7 @@ function WorkLog() {
         { id: "achievements", icon: "🏆", label: "成果物" },
         { id: "monthly", icon: "📊", label: "月次" },
       ].map(tab => (
-        <button key={tab.id} onClick={() => { setView(tab.id); setShowForm(false); setEditingTask(null); }} style={{
+        <button key={tab.id} onClick={() => { setView(tab.id); }} style={{
           flex: 1, padding: "10px 0 8px", border: "none", background: "none", cursor: "pointer",
           color: view === tab.id ? "#2563eb" : "#94a3b8",
         }}>
