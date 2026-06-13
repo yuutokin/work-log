@@ -216,27 +216,24 @@ function TaskItem({ task, onDelete, onEdit, categoryMap, readOnly }) {
 function TaskForm({ onSave, onCancel, initialData }) {
 // ─── TaskForm（ストップウォッチ内蔵 + 下書き自動保存） ───
 function TaskForm({ onSave, onCancel, initialData }) {
-  // 下書きの読み込み（新規作成時のみ）
   const DRAFT_KEY = "worklog-taskform-draft";
   const SW_KEY = "worklog-taskform-sw";
-  const loadDraft = () => {
-    if (initialData) return null; // 編集時は下書きを使わない
-    try { return JSON.parse(localStorage.getItem(DRAFT_KEY)); } catch { return null; }
-  };
-  const loadSwState = () => {
-    if (initialData) return null;
-    try { return JSON.parse(localStorage.getItem(SW_KEY)); } catch { return null; }
-  };
-  const draft = loadDraft();
-  const swState = loadSwState();
 
-  const [category, setCategory] = useState(initialData?.category || draft?.category || "");
-  const [caseName, setCaseName] = useState(initialData?.caseName || draft?.caseName || "");
-  const [detail, setDetail] = useState(initialData?.detail || initialData?.title || draft?.detail || "");
+  // 下書きの読み込み
+  let draft = null;
+  let swState = null;
+  if (!initialData) {
+    try { draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null"); } catch (e) {}
+    try { swState = JSON.parse(localStorage.getItem(SW_KEY) || "null"); } catch (e) {}
+  }
+
+  const [category, setCategory] = useState((initialData && initialData.category) || (draft && draft.category) || "");
+  const [caseName, setCaseName] = useState((initialData && initialData.caseName) || (draft && draft.caseName) || "");
+  const [detail, setDetail] = useState((initialData && (initialData.detail || initialData.title)) || (draft && draft.detail) || "");
   const [minutes, setMinutes] = useState(() => {
-    if (initialData?.minutes) return String(initialData.minutes);
-    if (initialData?.hours) return String(Math.round(initialData.hours * 60));
-    if (draft?.minutes) return draft.minutes;
+    if (initialData && initialData.minutes) return String(initialData.minutes);
+    if (initialData && initialData.hours) return String(Math.round(initialData.hours * 60));
+    if (draft && draft.minutes) return draft.minutes;
     return "";
   });
 
@@ -247,33 +244,33 @@ function TaskForm({ onSave, onCancel, initialData }) {
       localStorage.removeItem(DRAFT_KEY);
       return;
     }
-    localStorage.setItem(DRAFT_KEY, JSON.stringify({ category, caseName, detail, minutes }));
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({ category: category, caseName: caseName, detail: detail, minutes: minutes }));
   }, [category, caseName, detail, minutes, initialData]);
 
-  // ── ストップウォッチ state（復元可能） ──
-  const initialElapsed = (() => {
-    if (!swState) return 0;
+  // ── ストップウォッチ ──
+  let initialElapsed = 0;
+  if (swState) {
     if (swState.running && swState.startMs) {
-      return Math.floor((Date.now() - swState.startMs) / 1000);
+      initialElapsed = Math.floor((Date.now() - swState.startMs) / 1000);
+    } else if (swState.elapsed) {
+      initialElapsed = swState.elapsed;
     }
-    return swState.elapsed || 0;
-  })();
-  const [swRunning, setSwRunning] = useState(swState?.running || false);
+  }
+  const [swRunning, setSwRunning] = useState(swState ? !!swState.running : false);
   const [swElapsed, setSwElapsed] = useState(initialElapsed);
   const swIntervalRef = React.useRef(null);
-  const swStartRef = React.useRef(swState?.running && swState.startMs ? swState.startMs : null);
+  const swStartRef = React.useRef(swState && swState.running && swState.startMs ? swState.startMs : null);
 
-  // ストップウォッチ状態の保存
   const saveSwState = (running, elapsed, startMs) => {
     if (initialData) return;
     if (!running && elapsed === 0) {
       localStorage.removeItem(SW_KEY);
       return;
     }
-    localStorage.setItem(SW_KEY, JSON.stringify({ running, elapsed, startMs }));
+    localStorage.setItem(SW_KEY, JSON.stringify({ running: running, elapsed: elapsed, startMs: startMs }));
   };
 
-  // 起動中だった場合、interval を再開
+  // マウント時に起動中だったらintervalを再開
   useEffect(() => {
     if (swRunning && swStartRef.current) {
       swIntervalRef.current = setInterval(() => {
@@ -306,10 +303,9 @@ function TaskForm({ onSave, onCancel, initialData }) {
     setMinutes(String(m));
     swReset();
   };
-  const swFmt = (s) => { const m = Math.floor(s / 60), sec = s % 60; return `${String(m).padStart(2,"0")}:${String(sec).padStart(2,"0")}`; };
+  const swFmt = (s) => { const m = Math.floor(s / 60), sec = s % 60; return String(m).padStart(2,"0") + ":" + String(sec).padStart(2,"0"); };
   const swMins = Math.ceil(swElapsed / 60);
 
-  // 保存・キャンセル時に下書き削除
   const clearDrafts = () => {
     localStorage.removeItem(DRAFT_KEY);
     localStorage.removeItem(SW_KEY);
