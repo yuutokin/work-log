@@ -1902,11 +1902,16 @@ function WorkLog() {
     });
   }, []);
 
+  // 書き込み進行中フラグ：クラウド書き込み中は再取得で上書きしないようにする
+  const writingRef = React.useRef(0);
+
   useEffect(() => {
     function onVisible() {
       if (document.visibilityState === "visible") {
+        if (writingRef.current > 0) return; // 書き込み中なら再取得スキップ
         setSyncStatus("syncing");
         Promise.all([cloudFetch(), cloudFetchAch(), cloudFetchSummaries(), cloudFetchTodos(), cloudFetchDests()]).then(([cloud, cloudAch, cloudSum, cloudTodos, cloudDests]) => {
+          if (writingRef.current > 0) { setSyncStatus("synced"); return; } // 取得完了時にも再確認
           if (cloud) { setEntries(cloud); saveLocal(cloud); }
           if (cloudAch) { setAchievements(cloudAch); saveLocalAch(cloudAch); }
           if (cloudSum) { setSummaries(cloudSum); saveLocalSummaries(cloudSum); }
@@ -1923,37 +1928,76 @@ function WorkLog() {
   const persist = useCallback((newEntries, changedDate) => {
     setEntries(newEntries); saveLocal(newEntries); setSyncStatus("syncing");
     const tasks = newEntries[changedDate] || [];
+    writingRef.current++;
     const fn = tasks.length > 0 ? cloudSaveDay(changedDate, tasks) : cloudDeleteDay(changedDate);
-    fn.then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
+    fn.then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error")).finally(() => { writingRef.current--; });
   }, []);
 
   const persistSummary = useCallback((summary) => {
     const newSummaries = [...summaries.filter(s => s.date !== summary.date), summary];
     setSummaries(newSummaries); saveLocalSummaries(newSummaries);
-    cloudSaveSummaries(newSummaries).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
+    writingRef.current++;
+    cloudSaveSummaries(newSummaries).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error")).finally(() => { writingRef.current--; });
   }, [summaries]);
 
   const persistAch = useCallback((newAch) => {
     setAchievements(newAch); saveLocalAch(newAch); setSyncStatus("syncing");
-    cloudSaveAch(newAch).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
+    writingRef.current++;
+    cloudSaveAch(newAch).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error")).finally(() => { writingRef.current--; });
   }, []);
 
   const persistTodos = useCallback((newTodos) => {
     setTodos(newTodos); saveLocalTodos(newTodos); setSyncStatus("syncing");
-    cloudSaveTodos(newTodos).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
+    writingRef.current++;
+    cloudSaveTodos(newTodos).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error")).finally(() => { writingRef.current--; });
   }, []);
 
   const handleSaveTodo = (todo) => {
-    const idx = todos.findIndex(t => t.id === todo.id);
-    persistTodos(idx >= 0 ? todos.map(t => t.id === todo.id ? todo : t) : [...todos, todo]);
+    setTodos(prev => {
+      const idx = prev.findIndex(t => t.id === todo.id);
+      const newTodos = idx >= 0 ? prev.map(t => t.id === todo.id ? todo : t) : [...prev, todo];
+      saveLocalTodos(newTodos);
+      setSyncStatus("syncing");
+      writingRef.current++;
+      cloudSaveTodos(newTodos).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error")).finally(() => { writingRef.current--; });
+      return newTodos;
+    });
   };
-  const handleDeleteTodo = (id) => persistTodos(todos.filter(t => t.id !== id));
-  const handleToggleTodo = (id) => persistTodos(todos.map(t => t.id === id ? { ...t, done: !t.done, doneAt: !t.done ? new Date().toISOString() : null } : t));
-  const handleTogglePrint = (id) => persistTodos(todos.map(t => t.id === id ? { ...t, printed: !t.printed } : t));
+  const handleDeleteTodo = (id) => {
+    setTodos(prev => {
+      const newTodos = prev.filter(t => t.id !== id);
+      saveLocalTodos(newTodos);
+      setSyncStatus("syncing");
+      writingRef.current++;
+      cloudSaveTodos(newTodos).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error")).finally(() => { writingRef.current--; });
+      return newTodos;
+    });
+  };
+  const handleToggleTodo = (id) => {
+    setTodos(prev => {
+      const newTodos = prev.map(t => t.id === id ? { ...t, done: !t.done, doneAt: !t.done ? new Date().toISOString() : null } : t);
+      saveLocalTodos(newTodos);
+      setSyncStatus("syncing");
+      writingRef.current++;
+      cloudSaveTodos(newTodos).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error")).finally(() => { writingRef.current--; });
+      return newTodos;
+    });
+  };
+  const handleTogglePrint = (id) => {
+    setTodos(prev => {
+      const newTodos = prev.map(t => t.id === id ? { ...t, printed: !t.printed } : t);
+      saveLocalTodos(newTodos);
+      setSyncStatus("syncing");
+      writingRef.current++;
+      cloudSaveTodos(newTodos).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error")).finally(() => { writingRef.current--; });
+      return newTodos;
+    });
+  };
 
   const persistDests = useCallback((newDests) => {
     setDests(newDests); saveLocalDests(newDests); setSyncStatus("syncing");
-    cloudSaveDests(newDests).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
+    writingRef.current++;
+    cloudSaveDests(newDests).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error")).finally(() => { writingRef.current--; });
   }, []);
 
   const todayTasks = entries[selectedDate] || [];
