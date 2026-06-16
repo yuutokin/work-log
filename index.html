@@ -1761,13 +1761,18 @@ function TodoView({ todos, dests, onSave, onDelete, onToggle, onTogglePrint, onS
 }
 
 // ─── MorningReportModal ───
-function MorningReportModal({ date, onClose }) {
+function MorningReportModal({ date, todos, onClose }) {
   const [events, setEvents] = useState(null);
   const [loading, setLoading] = useState(true);
   const [goal, setGoal] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // 本日期限の通常タスク（郵送は除く・未完了のみ）
+  const todayTodos = (todos || [])
+    .filter(t => !t.done && (t.type || "normal") === "normal" && t.deadline === date)
+    .sort((a, b) => (a.title || "").localeCompare(b.title || ""));
 
   useEffect(() => {
     setLoading(true);
@@ -1788,6 +1793,12 @@ function MorningReportModal({ date, onClose }) {
         else text += `  ・${ev.start}〜${ev.end} ${ev.title}`;
         if (ev.location) text += `（${ev.location}）`;
         text += "\n";
+      });
+    }
+    if (todayTodos.length > 0) {
+      text += `\n【本日期限のタスク】\n`;
+      todayTodos.forEach(t => {
+        text += `  ・${t.title}\n`;
       });
     }
     if (goal.trim()) text += `\n【本日の目標】\n${goal.trim()}\n`;
@@ -1838,6 +1849,21 @@ function MorningReportModal({ date, onClose }) {
             ))}
           </div>
         </div>
+
+        {/* 本日期限のタスク */}
+        {todayTodos.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#64748b", marginBottom: 8 }}>📌 本日期限のタスク（{todayTodos.length}件）</div>
+            <div style={{ background: "#f8fafc", borderRadius: 12, padding: 10 }}>
+              {todayTodos.map(t => (
+                <div key={t.id} style={{ background: "#fff", borderRadius: 8, padding: "8px 10px", marginBottom: 6, borderLeft: "3px solid #7c3aed" }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#1e293b" }}>{t.title}</div>
+                  {t.memo && <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{t.memo}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* 本日の目標 */}
         <div style={{ marginBottom: 18 }}>
@@ -2186,7 +2212,7 @@ function WorkLog() {
         />
       )}
       {showMorning && (
-        <MorningReportModal date={selectedDate} onClose={() => setShowMorning(false)} />
+        <MorningReportModal date={selectedDate} todos={todos} onClose={() => setShowMorning(false)} />
       )}
 
       {selectedDate !== getToday() && (
