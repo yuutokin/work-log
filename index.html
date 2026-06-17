@@ -120,8 +120,18 @@ async function cloudFetchTodos() {
   try { const d = await jsonp(GAS_URL + "?action=fetchTodos"); if (d.success) return d.todos; } catch {}
   return null;
 }
-async function cloudSaveTodos(todos) {
-  try { const payload = encodeURIComponent(JSON.stringify({ todos })); await jsonp(GAS_URL + "?action=saveTodos&payload=" + payload); } catch {}
+async function cloudSaveTodo(todo) {
+  if (!GAS_URL) return;
+  try {
+    const payload = encodeURIComponent(JSON.stringify({ todo }));
+    await jsonp(GAS_URL + "?action=saveTodo&payload=" + payload);
+  } catch (e) { console.error("Cloud todo save error:", e); }
+}
+async function cloudDeleteTodo(id) {
+  if (!GAS_URL) return;
+  try {
+    await jsonp(GAS_URL + "?action=deleteTodo&id=" + encodeURIComponent(id));
+  } catch (e) { console.error("Cloud todo delete error:", e); }
 }
 
 async function cloudFetchCalendar(date) {
@@ -2058,8 +2068,7 @@ function WorkLog() {
       const newTodos = idx >= 0 ? prev.map(t => t.id === todo.id ? todo : t) : [...prev, todo];
       saveLocalTodos(newTodos);
       setSyncStatus("syncing");
-      writingRef.current++; lastWriteRef.current = Date.now();
-      cloudSaveTodos(newTodos).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error")).finally(() => { writingRef.current--; lastWriteRef.current = Date.now(); });
+      cloudSaveTodo(todo).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
       return newTodos;
     });
   };
@@ -2068,28 +2077,43 @@ function WorkLog() {
       const newTodos = prev.filter(t => t.id !== id);
       saveLocalTodos(newTodos);
       setSyncStatus("syncing");
-      writingRef.current++; lastWriteRef.current = Date.now();
-      cloudSaveTodos(newTodos).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error")).finally(() => { writingRef.current--; lastWriteRef.current = Date.now(); });
+      cloudDeleteTodo(id).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
       return newTodos;
     });
   };
   const handleToggleTodo = (id) => {
     setTodos(prev => {
-      const newTodos = prev.map(t => t.id === id ? { ...t, done: !t.done, doneAt: !t.done ? new Date().toISOString() : null } : t);
+      let updated = null;
+      const newTodos = prev.map(t => {
+        if (t.id === id) {
+          updated = { ...t, done: !t.done, doneAt: !t.done ? new Date().toISOString() : null };
+          return updated;
+        }
+        return t;
+      });
       saveLocalTodos(newTodos);
-      setSyncStatus("syncing");
-      writingRef.current++; lastWriteRef.current = Date.now();
-      cloudSaveTodos(newTodos).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error")).finally(() => { writingRef.current--; lastWriteRef.current = Date.now(); });
+      if (updated) {
+        setSyncStatus("syncing");
+        cloudSaveTodo(updated).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
+      }
       return newTodos;
     });
   };
   const handleTogglePrint = (id) => {
     setTodos(prev => {
-      const newTodos = prev.map(t => t.id === id ? { ...t, printed: !t.printed } : t);
+      let updated = null;
+      const newTodos = prev.map(t => {
+        if (t.id === id) {
+          updated = { ...t, printed: !t.printed };
+          return updated;
+        }
+        return t;
+      });
       saveLocalTodos(newTodos);
-      setSyncStatus("syncing");
-      writingRef.current++; lastWriteRef.current = Date.now();
-      cloudSaveTodos(newTodos).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error")).finally(() => { writingRef.current--; lastWriteRef.current = Date.now(); });
+      if (updated) {
+        setSyncStatus("syncing");
+        cloudSaveTodo(updated).then(() => setSyncStatus("synced")).catch(() => setSyncStatus("error"));
+      }
       return newTodos;
     });
   };
