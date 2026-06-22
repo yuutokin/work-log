@@ -1928,57 +1928,13 @@ function WorkLog() {
   const categoryMap = {}; CATEGORIES.forEach((c) => (categoryMap[c.id] = c));
 
   useEffect(() => {
-    // まずローカルを即時表示
-    setEntries(loadLocal());
-    setAchievements(loadLocalAch());
-    setSummaries(loadLocalSummaries());
-    setTodos(loadLocalTodos());
-    setDests(loadLocalDests());
-
     setSyncStatus("syncing");
     Promise.all([cloudFetch(), cloudFetchAch(), cloudFetchSummaries(), cloudFetchTodos(), cloudFetchDests()]).then(([cloud, cloudAch, cloudSum, cloudTodos, cloudDests]) => {
-      // 業務記録：クラウドの方が新しい or 同等のものとして上書き
-      if (cloud) { setEntries(cloud); saveLocal(cloud); }
-      if (cloudAch) {
-        // ローカルとクラウドをID基準でマージ（ローカル固有のものを残す）
-        const localAch = loadLocalAch();
-        const cloudIds = new Set(cloudAch.map(a => a.id));
-        const localOnly = localAch.filter(a => !cloudIds.has(a.id));
-        const merged = [...cloudAch, ...localOnly];
-        setAchievements(merged); saveLocalAch(merged);
-      }
-      if (cloudSum) {
-        const localSum = loadLocalSummaries();
-        const cloudDates = new Set(cloudSum.map(s => s.date));
-        const localOnly = localSum.filter(s => !cloudDates.has(s.date));
-        const merged = [...cloudSum, ...localOnly];
-        setSummaries(merged); saveLocalSummaries(merged);
-      }
-      if (cloudTodos) {
-        // ToDoはID基準でマージし、両方にあるものはlocalのdoneとprintedを優先（ユーザーが直近変更した可能性）
-        const localTodos = loadLocalTodos();
-        const localById = {};
-        localTodos.forEach(t => { localById[t.id] = t; });
-        const cloudIds = new Set(cloudTodos.map(t => t.id));
-        const localOnly = localTodos.filter(t => !cloudIds.has(t.id));
-        // クラウドのデータをベースに、ローカルにもあるものはローカルの完了状態を反映
-        const mergedFromCloud = cloudTodos.map(ct => {
-          const lt = localById[ct.id];
-          if (!lt) return ct;
-          // ローカルの方の更新が新しい場合（doneAtなどの変更）はローカル優先
-          // 最終的にはローカルを優先する（消えるよりは反映する方が安全）
-          return lt;
-        });
-        const merged = [...mergedFromCloud, ...localOnly];
-        setTodos(merged); saveLocalTodos(merged);
-      }
-      if (cloudDests) {
-        // 郵送先はクラウドに保存されているものを優先（編集は明示的に行われる）
-        const localDests = loadLocalDests();
-        if (cloudDests.length >= localDests.length) {
-          setDests(cloudDests); saveLocalDests(cloudDests);
-        }
-      }
+      if (cloud) { setEntries(cloud); saveLocal(cloud); } else { setEntries(loadLocal()); }
+      if (cloudAch) { setAchievements(cloudAch); saveLocalAch(cloudAch); } else { setAchievements(loadLocalAch()); }
+      if (cloudSum) { setSummaries(cloudSum); saveLocalSummaries(cloudSum); } else { setSummaries(loadLocalSummaries()); }
+      if (cloudTodos) { setTodos(cloudTodos); saveLocalTodos(cloudTodos); } else { setTodos(loadLocalTodos()); }
+      if (cloudDests) { setDests(cloudDests); saveLocalDests(cloudDests); } else { setDests(loadLocalDests()); }
       setSyncStatus(cloud ? "synced" : "offline");
       setLoaded(true);
     });
@@ -1991,44 +1947,18 @@ function WorkLog() {
   useEffect(() => {
     function onVisible() {
       if (document.visibilityState === "visible") {
-        // 書き込み中、または最後の書き込みから30秒以内なら再取得しない
+        // 書き込み中、または最後の書き込みから10秒以内なら再取得しない
         if (writingRef.current > 0) return;
-        if (Date.now() - lastWriteRef.current < 30000) return;
+        if (Date.now() - lastWriteRef.current < 10000) return;
         setSyncStatus("syncing");
         Promise.all([cloudFetch(), cloudFetchAch(), cloudFetchSummaries(), cloudFetchTodos(), cloudFetchDests()]).then(([cloud, cloudAch, cloudSum, cloudTodos, cloudDests]) => {
           if (writingRef.current > 0) { setSyncStatus("synced"); return; }
-          if (Date.now() - lastWriteRef.current < 30000) { setSyncStatus("synced"); return; }
+          if (Date.now() - lastWriteRef.current < 10000) { setSyncStatus("synced"); return; }
           if (cloud) { setEntries(cloud); saveLocal(cloud); }
-          if (cloudAch) {
-            const localAch = loadLocalAch();
-            const cloudIds = new Set(cloudAch.map(a => a.id));
-            const localOnly = localAch.filter(a => !cloudIds.has(a.id));
-            const merged = [...cloudAch, ...localOnly];
-            setAchievements(merged); saveLocalAch(merged);
-          }
-          if (cloudSum) {
-            const localSum = loadLocalSummaries();
-            const cloudDates = new Set(cloudSum.map(s => s.date));
-            const localOnly = localSum.filter(s => !cloudDates.has(s.date));
-            const merged = [...cloudSum, ...localOnly];
-            setSummaries(merged); saveLocalSummaries(merged);
-          }
-          if (cloudTodos) {
-            const localTodos = loadLocalTodos();
-            const localById = {};
-            localTodos.forEach(t => { localById[t.id] = t; });
-            const cloudIds = new Set(cloudTodos.map(t => t.id));
-            const localOnly = localTodos.filter(t => !cloudIds.has(t.id));
-            const mergedFromCloud = cloudTodos.map(ct => localById[ct.id] || ct);
-            const merged = [...mergedFromCloud, ...localOnly];
-            setTodos(merged); saveLocalTodos(merged);
-          }
-          if (cloudDests) {
-            const localDests = loadLocalDests();
-            if (cloudDests.length >= localDests.length) {
-              setDests(cloudDests); saveLocalDests(cloudDests);
-            }
-          }
+          if (cloudAch) { setAchievements(cloudAch); saveLocalAch(cloudAch); }
+          if (cloudSum) { setSummaries(cloudSum); saveLocalSummaries(cloudSum); }
+          if (cloudTodos) { setTodos(cloudTodos); saveLocalTodos(cloudTodos); }
+          if (cloudDests) { setDests(cloudDests); saveLocalDests(cloudDests); }
           setSyncStatus(cloud ? "synced" : "offline");
         });
       }
